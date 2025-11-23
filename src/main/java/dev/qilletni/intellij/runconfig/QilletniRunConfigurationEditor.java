@@ -56,7 +56,7 @@ public final class QilletniRunConfigurationEditor extends SettingsEditor<Qilletn
         localLibrary = new TextFieldWithBrowseButton();
         localLibrary.addBrowseFolderListener(project, FileChooserDescriptorFactory.createSingleFolderDescriptor().withTitle("Local library"));
         envComponent = new EnvironmentVariablesComponent();
-        useNativeJar = new JCheckBox("Use Natve Jar");
+        useNativeJar = new JCheckBox("Use Native Jar");
 
         var row = 0;
         var gbc = new GridBagConstraints();

@@ -87,7 +87,7 @@ public final class QilletniRunConfiguration extends RunConfigurationBase<Object>
         JDOMExternalizerUtil.writeField(element, "args", args);
         JDOMExternalizerUtil.writeField(element, "workingDir", workingDir);
         JDOMExternalizerUtil.writeField(element, "toolchainOverride", toolchainOverride);
-        JDOMExternalizerUtil.writeField(element, "buildJar", Boolean.toString(useNativeJar));
+        JDOMExternalizerUtil.writeField(element, "useNativeJar", Boolean.toString(useNativeJar));
         JDOMExternalizerUtil.writeField(element, "localLibrary", localLibrary);
     }
 }
