@@ -223,9 +223,9 @@ public final class QilletniIndexFacade {
     // List all extension methods for a given receiver type visible from the given file
     // Note: This consults the StubIndex first using a composite key Receiver#name. Since completions
     // need the full list, we query per-file scope for ALL method names by scanning stubs via index keys
-    // available in the files' stub trees. Names may not match beyond source-root scope; behavior is
-    // constrained to files under 'qilletni-src' source roots (see QilletniImportUtil.filterToQilletniSrc).
-    // To change this behavior (e.g., include all source roots or libraries), adjust candidateFilesForType()
+    // available in the files' stub trees. Behavior is constrained to files under 'qilletni-src'
+    // directories (see QilletniImportUtil.filterToQilletniSrc).
+    // To change this behavior (e.g., include libraries), adjust candidateFilesForType()
     // and/or QilletniImportUtil.filterToQilletniSrc.
     public static List<QilletniFunctionDef> listExtensionMethods(Project project, QilletniFile contextFile, String rawReceiverType) {
         System.out.println("[DEBUG_LOG][IndexFacade] listExtensionMethods receiverType=" + rawReceiverType + ", file=" + (contextFile != null ? contextFile.getVirtualFile() : null));

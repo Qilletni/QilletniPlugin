@@ -22,6 +22,9 @@ import java.util.*;
  * - Library imports like: import "libName:path/in/lib.ql" are recognized but not resolved yet.
  */
 final class QilletniImportUtil {
+    private static final String QILLETNI_SRC_DIR = "qilletni-src";
+    private static final String EXAMPLES_DIR = "examples";
+
     private QilletniImportUtil() {}
 
     /**
@@ -120,7 +123,7 @@ final class QilletniImportUtil {
     }
 
     static List<VirtualFile> getProjectLocalImports(QilletniFile contextFile) {
-        // Constrain project-local imports to files under any 'qilletni-src' source roots of the context module
+        // Constrain project-local imports to files under the context module's 'qilletni-src' directories (or same 'examples' dir)
         Set<VirtualFile> set = new LinkedHashSet<>();
         set.addAll(filterToQilletniSrc(contextFile, collectUnaliasedImports(contextFile)));
         Map<String, List<VirtualFile>> aliased = collectAliasedImports(contextFile);
@@ -250,44 +253,36 @@ final class QilletniImportUtil {
     }
 
     private static List<VirtualFile> filterToQilletniSrc(QilletniFile contextFile, List<VirtualFile> files) {
-        // Context-aware project-local filter per requirements:
-        // - If context is under 'qilletni-src': allow only files under any 'qilletni-src' source root of the same module.
-        // - If context is under 'examples': allow only files under the SAME 'examples' root as the context file (same root URL).
-        // - If context has no source root: allow only files in the same directory as the context file (same parent VirtualFile).
+        // Context-aware project-local filter. Roots are found by directory name, so 'qilletni-src' does not
+        // need to be marked as a Sources Root (build-system re-imports would undo that anyway).
+        // - If context is under 'qilletni-src': allow only files under a 'qilletni-src' dir of the same module's content roots.
+        // - If context is under 'examples': allow only files under the SAME 'examples' dir as the context file.
+        // - Otherwise: allow only files in the same directory as the context file (same parent VirtualFile).
         if (files == null || files.isEmpty()) return List.of();
         var project = contextFile.getProject();
         var fileIndex = ProjectFileIndex.getInstance(project);
         var ctxVf = contextFile.getVirtualFile();
-        var ctxRoot = ctxVf != null ? fileIndex.getSourceRootForFile(ctxVf) : null;
+        var ctxRoot = ctxVf != null ? findQilletniRoot(ctxVf, fileIndex) : null;
         var ctxParent = ctxVf != null ? ctxVf.getParent() : null;
-
-        Module module = null;
-        if (ctxVf != null) {
-            module = ModuleUtilCore.findModuleForFile(ctxVf, project);
-        }
 
         // Build allowed root URLs per context
         Set<String> allowedRootUrls = new HashSet<>();
-        String mode = null; // "qsrc", "examples", or "same-dir"
+        String mode = "same-dir"; // "qsrc", "examples", or "same-dir"
         if (ctxRoot != null) {
-            var rootName = ctxRoot.getName();
-            if ("qilletni-src".equals(rootName)) {
+            if (QILLETNI_SRC_DIR.equals(ctxRoot.getName())) {
                 mode = "qsrc";
+                allowedRootUrls.add(ctxRoot.getUrl());
+                Module module = ModuleUtilCore.findModuleForFile(ctxVf, project);
                 if (module != null) {
-                    for (var root : ModuleRootManager.getInstance(module).getSourceRoots(false)) {
-                        if (root != null && "qilletni-src".equals(root.getName())) {
-                            allowedRootUrls.add(root.getUrl());
-                        }
+                    for (var contentRoot : ModuleRootManager.getInstance(module).getContentRoots()) {
+                        var qsrc = contentRoot.findChild(QILLETNI_SRC_DIR);
+                        if (qsrc != null && qsrc.isDirectory()) allowedRootUrls.add(qsrc.getUrl());
                     }
                 }
-            } else if ("examples".equals(rootName)) {
+            } else {
                 mode = "examples";
-                // Only the same examples root as the context
                 allowedRootUrls.add(ctxRoot.getUrl());
             }
-        }
-        if (mode == null) {
-            mode = "same-dir";
         }
 
         List<VirtualFile> result = new ArrayList<>();
@@ -300,33 +295,26 @@ final class QilletniImportUtil {
                 continue;
             }
 
-            // For mode qsrc/examples, verify the candidate's source root and module isolation
-            var root = fileIndex.getSourceRootForFile(vf);
-            String rootName = root != null ? root.getName() : null;
-            boolean ok = false;
-            if (root != null) {
-                if ("qsrc".equals(mode)) {
-                    ok = "qilletni-src".equals(rootName) && (allowedRootUrls.isEmpty() || allowedRootUrls.contains(root.getUrl()));
-                } else if ("examples".equals(mode)) {
-                    ok = "examples".equals(rootName) && allowedRootUrls.contains(root.getUrl());
-                }
-            } else {
-                // Fallback for cases where source root is null: walk ancestors to infer root name
-                for (var cur = vf.getParent(); cur != null; cur = cur.getParent()) {
-                    var name = cur.getName();
-                    if ("qsrc".equals(mode) && "qilletni-src".equals(name)) {
-                        var url = cur.getUrl();
-                        ok = allowedRootUrls.isEmpty() || allowedRootUrls.contains(url);
-                        break;
-                    } else if ("examples".equals(mode) && "examples".equals(name)) {
-                        var url = cur.getUrl();
-                        ok = allowedRootUrls.contains(url);
-                        break;
-                    }
-                }
+            // For mode qsrc/examples, the candidate must sit under one of the allowed roots
+            var root = findQilletniRoot(vf, fileIndex);
+            if (root != null && root.getName().equals(ctxRoot.getName()) && allowedRootUrls.contains(root.getUrl())) {
+                result.add(vf);
             }
-            if (ok) result.add(vf);
         }
         return result;
+    }
+
+    /**
+     * Returns the nearest ancestor directory named 'qilletni-src' or 'examples', without walking above the
+     * file's content root (so an unrelated 'examples' directory outside the project is never matched).
+     */
+    private static VirtualFile findQilletniRoot(VirtualFile vf, ProjectFileIndex fileIndex) {
+        var contentRoot = fileIndex.getContentRootForFile(vf);
+        for (var cur = vf.getParent(); cur != null; cur = cur.getParent()) {
+            var name = cur.getName();
+            if (QILLETNI_SRC_DIR.equals(name) || EXAMPLES_DIR.equals(name)) return cur;
+            if (cur.equals(contentRoot)) break;
+        }
+        return null;
     }
 }

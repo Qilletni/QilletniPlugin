@@ -90,6 +90,8 @@ public final class QilletniLibraryManager {
         var rootPathStr = settings != null ? settings.getLibrariesRootPath() : "";
         if (rootPathStr == null || rootPathStr.isBlank()) {
             snapshot.set(new Snapshot(List.of(), List.of(), List.of(), System.currentTimeMillis()));
+            // No libraries root configured: still sync so previously mirrored libraries are removed
+            dev.qilletni.intellij.library.QilletniProjectLibraries.requestSyncAllOpenProjects();
             return;
         }
         Path root = Path.of(rootPathStr);

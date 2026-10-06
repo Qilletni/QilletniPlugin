@@ -95,8 +95,8 @@
         <applicationConfigurable instance="dev.qilletni.intellij.toolchain.QilletniToolchainConfigurable" id="dev.qilletni.intellij.settings.QilletniToolchainConfigurable" displayName="Qilletni: Toolchain" parentId="tools"/>
         <consoleFilterProvider implementation="dev.qilletni.intellij.execution.QilletniConsoleFilterProvider"/>
 
-        <postStartupActivity implementation="dev.qilletni.intellij.project.QilletniSourceRootStartupActivity"/>
-        <notificationGroup id="Qilletni Source Root" displayType="BALLOON" isLogByDefault="false"/>
+        <postStartupActivity implementation="dev.qilletni.intellij.project.QilletniRootsListenerStartupActivity"/>
+        <notificationGroup id="Qilletni Libraries" displayType="BALLOON"/>
 
         <localInspection language="Qilletni"
                           groupPath="Qilletni"

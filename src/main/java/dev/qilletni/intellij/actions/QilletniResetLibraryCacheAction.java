@@ -36,11 +36,11 @@ public final class QilletniResetLibraryCacheAction extends AnAction {
                     });
                 }
             }
-            Notifications.Bus.notify(new Notification("Qilletni Source Root", "Qilletni Libraries",
+            Notifications.Bus.notify(new Notification("Qilletni Libraries", "Qilletni Libraries",
                     "Cleared Qilletni library cache. Refreshing and rescanning…", NotificationType.INFORMATION), project);
             VirtualFileManager.getInstance().asyncRefresh(() -> QilletniLibraryManager.getInstance().rescan());
         } catch (Exception ex) {
-            Notifications.Bus.notify(new Notification("Qilletni Source Root", "Qilletni Libraries",
+            Notifications.Bus.notify(new Notification("Qilletni Libraries", "Qilletni Libraries",
                     "Failed to clear Qilletni library cache: " + ex.getMessage(), NotificationType.ERROR), project);
         }
     }
