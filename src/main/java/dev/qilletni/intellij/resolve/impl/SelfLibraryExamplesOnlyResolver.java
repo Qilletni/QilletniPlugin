@@ -92,7 +92,14 @@ public final class SelfLibraryExamplesOnlyResolver implements QilletniLibraryPat
             Object data = yamlLoader.load(reader);
             if (data instanceof java.util.Map<?, ?> map) {
                 Object name = map.get("name");
-                if (name instanceof String s && !s.isBlank()) return s.trim();
+                if (name instanceof String s && !s.isBlank()) {
+                    var trimmed = s.trim();
+                    // Remove scope from name if present
+                    if (trimmed.contains("/")) {
+                        trimmed = trimmed.substring(trimmed.lastIndexOf('/') + 1);
+                    }
+                    return trimmed;
+                }
             }
         } catch (Throwable ignored) {
         }

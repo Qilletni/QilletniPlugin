@@ -9,6 +9,7 @@ import org.jetbrains.annotations.Nullable;
 
 /**
  * Application-level settings storing the root folder path containing .qll archives.
+ * Expected structure: <root>/<scope>/<name>/<version>.qll
  */
 @State(name = "QilletniLibrariesSettings", storages = @Storage("QilletniLibrariesSettings.xml"))
 public final class QilletniLibrariesSettings implements PersistentStateComponent<QilletniLibrariesSettings.State> {

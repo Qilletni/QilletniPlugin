@@ -189,7 +189,11 @@ public final class QilletniCompletionContributor extends CompletionContributor {
                 PlatformPatterns.psiElement(QilletniTypes.ID).withParent(QilletniLhsMember.class),
                 new LhsMemberPropertiesCompletionProvider());
 
-        // Dot-after-expression: trigger when caret is at dot or at error element right after a dot
+        // Dot-after-expression: trigger when caret is at dot or right after a dot
+        extend(CompletionType.BASIC,
+                PlatformPatterns.psiElement()
+                        .afterLeaf(PlatformPatterns.psiElement(QilletniTypes.DOT)),
+                new DotAfterExpressionCompletionProvider());
         extend(CompletionType.BASIC,
                 PlatformPatterns.psiElement().withElementType(TokenType.ERROR_ELEMENT),
                 new DotAfterExpressionCompletionProvider());

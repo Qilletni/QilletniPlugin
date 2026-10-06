@@ -23,6 +23,8 @@ public final class QilletniBuildRunConfigurationFactory extends ConfigurationFac
         var cfg = new QilletniBuildRunConfiguration(project, this, "Qilletni Build");
         var base = project.getBasePath();
         cfg.targetPath = base != null ? base : "";
+        // Default output directory - the actual subdirectory structure (scope/name/version.qll)
+        // will be created by the build tool based on project metadata
         cfg.outputDir = Paths.get(System.getProperty("user.home"), ".qilletni", "packages").toString();
         return cfg;
     }

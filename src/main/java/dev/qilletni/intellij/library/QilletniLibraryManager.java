@@ -30,6 +30,7 @@ import java.util.stream.Collectors;
 
 /**
  * Application-level manager that discovers .qll archives and exposes their sources and metadata.
+ * Expects packages in hierarchical structure: <scope>/<name>/<version>.qll
  */
 @Service
 public final class QilletniLibraryManager {
@@ -103,14 +104,23 @@ public final class QilletniLibraryManager {
 
         List<ScanItem> scanned = new ArrayList<>();
         try {
-            try (var paths = Files.walk(root)) {
-                paths.filter(p -> Files.isRegularFile(p) && p.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".qll"))
-                        .forEach(p -> {
-                            var item = scanArchive(p);
-                            if (item != null) {
-                                scanned.add(item);
-                            }
+            // Scan hierarchical structure: ~/.qilletni/packages/<scope>/<name>/<version>.qll
+            try (var scopeDirs = Files.list(root)) {
+                scopeDirs.filter(Files::isDirectory).forEach(scopeDir -> {
+                    try (var nameDirs = Files.list(scopeDir)) {
+                        nameDirs.filter(Files::isDirectory).forEach(nameDir -> {
+                            try (var versionFiles = Files.list(nameDir)) {
+                                versionFiles.filter(p -> Files.isRegularFile(p) && p.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".qll"))
+                                        .forEach(p -> {
+                                            var item = scanArchive(p);
+                                            if (item != null) {
+                                                scanned.add(item);
+                                            }
+                                        });
+                            } catch (IOException ignored) {}
                         });
+                    } catch (IOException ignored) {}
+                });
             }
         } catch (IOException ignored) {}
 

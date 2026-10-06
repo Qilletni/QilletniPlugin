@@ -10,4 +10,7 @@ public interface QilletniAlbumExpr extends PsiElement {
   @NotNull
   QilletniAlbumUrlOrNamePair getAlbumUrlOrNamePair();
 
+  @NotNull
+  QilletniOrderSettings getOrderSettings();
+
 }

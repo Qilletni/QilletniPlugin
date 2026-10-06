@@ -15,7 +15,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 /**
- * Settings page to select the root folder containing .qll archives.
+ * Settings page to select the root folder containing .qll archives in hierarchical structure.
+ * Expected structure: <root>/<scope>/<name>/<version>.qll
  */
 public final class QilletniLibrariesConfigurable implements Configurable {
 
@@ -42,7 +43,7 @@ public final class QilletniLibrariesConfigurable implements Configurable {
         var panel = new JBPanel<>(new GridBagLayout());
         var c = new GridBagConstraints();
         c.gridx = 0; c.gridy = 0; c.weightx = 0; c.insets = new Insets(4,4,4,4); c.anchor = GridBagConstraints.WEST;
-        panel.add(new JBLabel("Libraries root (folder containing .qll files):"), c);
+        panel.add(new JBLabel("Libraries root (folder containing <scope>/<name>/<version>.qll files):"), c);
         c.gridx = 1; c.gridy = 0; c.weightx = 1; c.fill = GridBagConstraints.HORIZONTAL;
         panel.add(pathField, c);
         c.gridx = 2; c.gridy = 0; c.weightx = 0; c.fill = GridBagConstraints.NONE;

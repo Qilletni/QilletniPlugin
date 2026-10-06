@@ -56,6 +56,7 @@
         <lang.braceMatcher language="Qilletni" implementationClass="dev.qilletni.intellij.QilletniBraceMatcher"/>
         <lang.quoteHandler language="Qilletni" implementationClass="dev.qilletni.intellij.QilletniQuoteHandler"/>
         <enterHandlerDelegate implementation="dev.qilletni.intellij.QilletniEnterHandler"/>
+        <typedHandler implementation="dev.qilletni.intellij.completion.QilletniTypedHandler"/>
         <intentionAction>
             <language>Qilletni</language>
             <category>Qilletni</category>

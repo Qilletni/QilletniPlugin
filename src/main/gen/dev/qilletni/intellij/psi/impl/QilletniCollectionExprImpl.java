@@ -39,21 +39,21 @@ public class QilletniCollectionExprImpl extends QilletniPsiElementBase implement
   }
 
   @Override
-  @Nullable
-  public QilletniOrderDefine getOrderDefine() {
-    return PsiTreeUtil.getChildOfType(this, QilletniOrderDefine.class);
-  }
-
-  @Override
-  @Nullable
-  public QilletniWeightsDefine getWeightsDefine() {
-    return PsiTreeUtil.getChildOfType(this, QilletniWeightsDefine.class);
+  @NotNull
+  public QilletniOrderSettings getOrderSettings() {
+    return notNullChild(PsiTreeUtil.getChildOfType(this, QilletniOrderSettings.class));
   }
 
   @Override
   @Nullable
   public PsiElement getCollectionType() {
     return findChildByType(COLLECTION_TYPE);
+  }
+
+  @Override
+  @Nullable
+  public PsiElement getId() {
+    return findChildByType(ID);
   }
 
   @Override
