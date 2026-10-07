@@ -1,9 +1,10 @@
 package dev.qilletni.intellij.spotify;
 
 import dev.qilletni.intellij.spotify.auth.SpotifyAuthService;
-import com.intellij.openapi.diagnostic.Logger;
+import com.intellij.util.concurrency.AppExecutorUtil;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+import org.apache.hc.core5.http.ParseException;
 import se.michaelthelin.spotify.SpotifyApi;
 import se.michaelthelin.spotify.exceptions.SpotifyWebApiException;
 import se.michaelthelin.spotify.model_objects.specification.*;
@@ -11,20 +12,16 @@ import se.michaelthelin.spotify.model_objects.specification.*;
 import java.io.IOException;
 import java.net.URI;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
-import java.util.concurrent.Executors;
 
 /**
  * Lightweight service wrapper around spotify-web-api-java for searching tracks, albums, and playlists.
- * Token sourcing: PropertiesComponent key "qilletni.spotify.token" or env var QILLETNI_SPOTIFY_TOKEN.
+ * Requests are authorized with the access token of {@link SpotifyAuthService}.
  */
 public final class QilletniSpotifyService {
-    private static final Logger LOG = Logger.getInstance(QilletniSpotifyService.class);
-    private static final String TOKEN_KEY = "qilletni.spotify.token"; // deprecated
-    private static final Executor EXEC = Executors.newCachedThreadPool();
+    private static final Executor EXEC = AppExecutorUtil.getAppExecutorService();
 
     public enum MusicType {
         SONG, ALBUM, COLLECTION;
@@ -60,7 +57,7 @@ public final class QilletniSpotifyService {
             try {
                 var result = api().searchTracks(q).limit(limit).offset(offset).build().execute();
                 return toSongChoice(asNonNullList(result.getItems()));
-            } catch (IOException | SpotifyWebApiException | org.apache.hc.core5.http.ParseException e) {
+            } catch (IOException | SpotifyWebApiException | ParseException e) {
                 throw new RuntimeException(e);
             }
         }, EXEC);
@@ -71,7 +68,7 @@ public final class QilletniSpotifyService {
             try {
                 var result = api().searchAlbums(q).limit(limit).offset(offset).build().execute();
                 return toAlbumChoice(asNonNullList(result.getItems()));
-            } catch (IOException | SpotifyWebApiException | org.apache.hc.core5.http.ParseException e) {
+            } catch (IOException | SpotifyWebApiException | ParseException e) {
                 throw new RuntimeException(e);
             }
         }, EXEC);
@@ -82,7 +79,7 @@ public final class QilletniSpotifyService {
             try {
                 var result = api().searchPlaylists(q).limit(limit).offset(offset).build().execute();
                 return toPlaylistChoice(asNonNullList(result.getItems()));
-            } catch (IOException | SpotifyWebApiException | org.apache.hc.core5.http.ParseException e) {
+            } catch (IOException | SpotifyWebApiException | ParseException e) {
                 throw new RuntimeException(e);
             }
         }, EXEC);
@@ -99,7 +96,7 @@ public final class QilletniSpotifyService {
                 musicChoices.addAll(toPlaylistChoice(asNonNullList(result.getPlaylists().getItems())));
 
                 return musicChoices;
-            } catch (IOException | SpotifyWebApiException | org.apache.hc.core5.http.ParseException e) {
+            } catch (IOException | SpotifyWebApiException | ParseException e) {
                 throw new RuntimeException(e);
             }
         }, EXEC);

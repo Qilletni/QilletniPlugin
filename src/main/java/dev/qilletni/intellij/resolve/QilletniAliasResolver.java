@@ -1,15 +1,20 @@
 package dev.qilletni.intellij.resolve;
 
 import com.intellij.openapi.util.Key;
+import com.intellij.openapi.util.ModificationTracker;
+import com.intellij.openapi.util.SimpleModificationTracker;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.psi.util.CachedValue;
 import com.intellij.psi.util.CachedValueProvider;
 import com.intellij.psi.util.CachedValuesManager;
 import com.intellij.psi.util.PsiModificationTracker;
-import com.intellij.openapi.roots.ProjectRootManager;
 import dev.qilletni.intellij.QilletniFile;
+import dev.qilletni.intellij.library.QilletniProjectDependencies;
 
-import java.util.*;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
 
 /**
  * Alias-aware resolution facade for imported files.
@@ -19,34 +24,19 @@ import java.util.*;
 public final class QilletniAliasResolver {
     private QilletniAliasResolver() {}
 
-    private static final com.intellij.openapi.util.SimpleModificationTracker ROOTS_TRACKER = new com.intellij.openapi.util.SimpleModificationTracker();
+    private static final SimpleModificationTracker ROOTS_TRACKER = new SimpleModificationTracker();
     public static void onRootsChanged() { ROOTS_TRACKER.incModificationCount(); }
-    public static com.intellij.openapi.util.ModificationTracker rootsTracker() { return ROOTS_TRACKER; }
+    public static ModificationTracker rootsTracker() { return ROOTS_TRACKER; }
 
     private static final Key<CachedValue<AliasData>> KEY = Key.create("qilletni.alias.data");
 
-    public static Map<String, List<VirtualFile>> getAliasToFiles(QilletniFile contextFile) {
-        AliasData data = getData(contextFile);
-        // return defensive copy
-        Map<String, List<VirtualFile>> out = new LinkedHashMap<>();
-        data.aliasToFiles.forEach((k, v) -> out.put(k, List.copyOf(v)));
-        return out;
-    }
-
     public static List<VirtualFile> getFilesForQualifier(QilletniFile contextFile, String qualifier) {
         // Alias-qualified names are re-exported transitively.
-        AliasData data = getData(contextFile);
-        return List.copyOf(data.aliasToFiles.getOrDefault(qualifier, List.of()));
-    }
-
-    public static List<VirtualFile> getProjectLocalImports(QilletniFile contextFile) {
-        AliasData data = getData(contextFile);
-        return List.copyOf(data.projectLocalImports);
+        return getData(contextFile).aliasToFiles().getOrDefault(qualifier, List.of());
     }
 
     public static List<VirtualFile> getAllImportedFiles(QilletniFile contextFile) {
-        AliasData data = getData(contextFile);
-        return List.copyOf(data.allImports);
+        return getData(contextFile).allImports();
     }
 
     private static AliasData getData(QilletniFile contextFile) {
@@ -54,29 +44,17 @@ public final class QilletniAliasResolver {
             // Build transitive alias maps: each alias expands to its transitive closure.
             Map<String, List<VirtualFile>> directAliased = QilletniImportUtil.collectAliasedImports(contextFile);
             Map<String, List<VirtualFile>> aliased = new LinkedHashMap<>();
-            for (var entry : directAliased.entrySet()) {
-                String alias = entry.getKey();
+            for (String alias : directAliased.keySet()) {
                 // Re-export alias-qualified names transitively (recursive). Project-local scope applied.
-                List<VirtualFile> files = QilletniImportUtil.getTransitiveFilesForQualifier(contextFile, alias);
-                aliased.put(alias, new ArrayList<>(files));
+                aliased.put(alias, List.copyOf(QilletniImportUtil.getTransitiveFilesForQualifier(contextFile, alias)));
             }
-            // Transitive project-local imports (unaliased + aliased contents) form the ambient scope.
-            LinkedHashSet<VirtualFile> projectLocal = new LinkedHashSet<>(QilletniImportUtil.getTransitiveProjectLocalImports(contextFile));
-            // All imports (project-local + libraries) transitively; kept for completeness/possible future use.
-            LinkedHashSet<VirtualFile> all = new LinkedHashSet<>(QilletniImportUtil.getTransitiveAllImportedFiles(contextFile));
-            AliasData value = new AliasData(aliased, new ArrayList<>(projectLocal), new ArrayList<>(all));
-            return CachedValueProvider.Result.create(value, PsiModificationTracker.MODIFICATION_COUNT, ROOTS_TRACKER);
+            // All imports (project-local + libraries), transitively
+            var all = List.copyOf(new LinkedHashSet<>(QilletniImportUtil.getTransitiveAllImportedFiles(contextFile)));
+            AliasData value = new AliasData(aliased, all);
+            var dependencies = QilletniProjectDependencies.getInstance(contextFile.getProject()).getModificationTracker();
+            return CachedValueProvider.Result.create(value, PsiModificationTracker.MODIFICATION_COUNT, ROOTS_TRACKER, dependencies);
         });
     }
 
-    private static final class AliasData {
-        final Map<String, List<VirtualFile>> aliasToFiles;
-        final List<VirtualFile> projectLocalImports;
-        final List<VirtualFile> allImports;
-        AliasData(Map<String, List<VirtualFile>> aliasToFiles, List<VirtualFile> projectLocalImports, List<VirtualFile> allImports) {
-            this.aliasToFiles = aliasToFiles;
-            this.projectLocalImports = projectLocalImports;
-            this.allImports = allImports;
-        }
-    }
+    private record AliasData(Map<String, List<VirtualFile>> aliasToFiles, List<VirtualFile> allImports) {}
 }

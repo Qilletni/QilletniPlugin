@@ -1,9 +1,7 @@
 package dev.qilletni.intellij.references;
 
 import com.intellij.openapi.util.TextRange;
-import com.intellij.patterns.ElementPattern;
 import com.intellij.patterns.PlatformPatterns;
-import com.intellij.patterns.StandardPatterns;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiReference;
 import com.intellij.psi.PsiReferenceContributor;

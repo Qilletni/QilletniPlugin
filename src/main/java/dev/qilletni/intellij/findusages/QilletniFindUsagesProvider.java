@@ -1,10 +1,10 @@
 package dev.qilletni.intellij.findusages;
 
+import com.intellij.psi.PsiNameIdentifierOwner;
 import com.intellij.lang.cacheBuilder.DefaultWordsScanner;
 import com.intellij.lang.cacheBuilder.WordsScanner;
 import com.intellij.lang.findUsages.FindUsagesProvider;
 import com.intellij.psi.PsiElement;
-import com.intellij.psi.PsiFile;
 import com.intellij.psi.tree.TokenSet;
 import dev.qilletni.intellij.QilletniLexerAdapter;
 import dev.qilletni.intellij.psi.*;
@@ -26,7 +26,7 @@ public final class QilletniFindUsagesProvider implements FindUsagesProvider {
 
     @Override
     public boolean canFindUsagesFor(@NotNull PsiElement psiElement) {
-        return psiElement instanceof com.intellij.psi.PsiNameIdentifierOwner;
+        return psiElement instanceof PsiNameIdentifierOwner;
     }
 
     @Override

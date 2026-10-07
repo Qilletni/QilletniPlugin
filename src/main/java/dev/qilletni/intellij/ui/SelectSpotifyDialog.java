@@ -1,325 +1,342 @@
 package dev.qilletni.intellij.ui;
 
+import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.application.ModalityState;
+import com.intellij.openapi.options.ShowSettingsUtil;
 import com.intellij.openapi.project.Project;
+import com.intellij.openapi.ui.ComboBox;
 import com.intellij.openapi.ui.DialogWrapper;
+import com.intellij.ui.DocumentAdapter;
+import com.intellij.ui.ScrollPaneFactory;
+import com.intellij.ui.SimpleListCellRenderer;
 import com.intellij.ui.components.JBCheckBox;
 import com.intellij.ui.components.JBLabel;
 import com.intellij.ui.components.JBList;
 import com.intellij.ui.components.JBTextField;
+import com.intellij.util.Alarm;
+import com.intellij.util.concurrency.AppExecutorUtil;
+import com.intellij.util.io.HttpRequests;
 import com.intellij.util.ui.JBImageIcon;
 import com.intellij.util.ui.JBUI;
+import com.intellij.util.ui.UIUtil;
+import dev.qilletni.intellij.QilletniBundle;
+import dev.qilletni.intellij.settings.QilletniSpotifyConfigurable;
 import dev.qilletni.intellij.spotify.QilletniSpotifyService;
-import dev.qilletni.intellij.spotify.QilletniSpotifyService.MusicTypeContext;
-import dev.qilletni.intellij.spotify.auth.SpotifyAuthService;
-import com.intellij.openapi.options.ShowSettingsUtil;
 import dev.qilletni.intellij.spotify.QilletniSpotifyService.MusicChoice;
 import dev.qilletni.intellij.spotify.QilletniSpotifyService.MusicType;
+import dev.qilletni.intellij.spotify.QilletniSpotifyService.MusicTypeContext;
+import dev.qilletni.intellij.spotify.auth.SpotifyAuthService;
+import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import javax.imageio.ImageIO;
-import javax.swing.*;
+import javax.swing.DefaultListModel;
+import javax.swing.Icon;
+import javax.swing.JButton;
+import javax.swing.JComponent;
+import javax.swing.JLabel;
+import javax.swing.JPanel;
 import javax.swing.event.DocumentEvent;
-import javax.swing.event.DocumentListener;
-import java.awt.*;
-import java.awt.image.BufferedImage;
-import java.net.URL;
+import java.awt.BorderLayout;
+import java.awt.Dimension;
+import java.awt.FlowLayout;
+import java.awt.Font;
+import java.awt.Image;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * DialogWrapper for Spotify selection with type switching, debounced search, artwork, and simple token UX.
+ * Search Spotify for a song, album or playlist. Searching starts as you type; results can be filtered and sorted
+ * locally. When not signed in, the dialog offers to sign in without leaving it.
  */
 public class SelectSpotifyDialog extends DialogWrapper {
-    // Sorting/filtering helpers
-    private JComboBox<String> sortBoxRef;
-    private JBTextField filterFieldRef;
-    private static final Map<String, Icon> ICON_CACHE = new ConcurrentHashMap<>();
-    private JButton retryButtonRef;
+    private static final int ARTWORK_CACHE_SIZE = 200;
+
+    private enum Sort {
+        BEST("spotify.picker.sort.best"), NAME("spotify.picker.sort.name"), YEAR("spotify.picker.sort.year");
+        final String key;
+        Sort(String key) { this.key = key; }
+    }
 
     private final Project project;
+    private final QilletniSpotifyService service = new QilletniSpotifyService();
+    private final Alarm searchAlarm = new Alarm(Alarm.ThreadToUse.SWING_THREAD, getDisposable());
+    private final AtomicInteger searchGeneration = new AtomicInteger();
+    private final Map<String, Icon> artwork = new LinkedHashMap<>(16, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, Icon> eldest) {
+            return size() > ARTWORK_CACHE_SIZE;
+        }
+    };
+
     private MusicType selectedType;
-    private final JBCheckBox includeSongKeyword;
+    private List<MusicChoice> results = List.of();
     private final DefaultListModel<MusicChoice> model = new DefaultListModel<>();
     private final JBList<MusicChoice> list = new JBList<>(model);
     private final JBTextField search = new JBTextField();
-    private final QilletniSpotifyService service = new QilletniSpotifyService();
-
-    private final Timer debounceTimer;
-
-    // Token & error UI
-    private JBLabel errorLabel;
-    private JPanel settingsPanel;
-    private JButton openSettingsButton;
+    private final JBTextField filter = new JBTextField();
+    private final ComboBox<Sort> sort = new ComboBox<>(Sort.values());
+    private final ComboBox<MusicType> typeBox = new ComboBox<>(MusicType.values());
+    private final JBCheckBox includeSongKeyword = new JBCheckBox(QilletniBundle.message("spotify.picker.songKeyword"), false);
+    private final JBLabel message = new JBLabel();
+    private final JButton retryButton = new JButton(QilletniBundle.message("spotify.picker.retry"));
+    private final JButton signInButton = new JButton(QilletniBundle.message("spotify.signIn"));
+    private final JButton settingsButton = new JButton(QilletniBundle.message("spotify.picker.settings"));
 
     public SelectSpotifyDialog(Project project, MusicTypeContext initialType) {
         super(project, true);
         this.project = project;
         this.selectedType = MusicType.fromContext(initialType);
-
-        setTitle("Select Spotify Music");
-        includeSongKeyword = new JBCheckBox("Include \"song\" keyword", false); // default OFF per spec
-        includeSongKeyword.setEnabled(initialType == MusicTypeContext.SONG);
-        debounceTimer = new Timer(300, e -> performSearch());
-        debounceTimer.setRepeats(false);
+        setTitle(QilletniBundle.message("spotify.picker.title"));
         init();
-        getOKAction().setEnabled(true);
-        list.addListSelectionListener(e -> getOKAction().setEnabled(list.getSelectedValue() != null));
-        list.addMouseListener(new java.awt.event.MouseAdapter() {
-            @Override public void mouseClicked(java.awt.event.MouseEvent e) {
-                if (e.getClickCount() == 2 && getOKAction().isEnabled()) doOKAction();
-            }
-        });
+        getOKAction().setEnabled(false);
+        updateSignInState();
+    }
+
+    @Override
+    public @Nullable JComponent getPreferredFocusedComponent() {
+        return search;
     }
 
     @Override
     protected @Nullable JComponent createCenterPanel() {
-        var panel = new JPanel(new BorderLayout(JBUI.scale(8), JBUI.scale(8)));
-
-        // North: Type switch + search field
-        var north = new JPanel(new BorderLayout(JBUI.scale(8), 0));
-        var typeBox = new JComboBox<>(new MusicType[]{MusicType.SONG, MusicType.ALBUM, MusicType.COLLECTION});
         typeBox.setSelectedItem(selectedType);
+        typeBox.setRenderer(SimpleListCellRenderer.create("", type -> QilletniBundle.message("spotify.picker.type." + type.name().toLowerCase(Locale.ROOT))));
         typeBox.addActionListener(e -> {
             selectedType = (MusicType) typeBox.getSelectedItem();
             includeSongKeyword.setEnabled(selectedType == MusicType.SONG);
-            debounceTimer.restart();
+            scheduleSearch();
         });
-        north.add(typeBox, BorderLayout.WEST);
+        includeSongKeyword.setEnabled(selectedType == MusicType.SONG);
 
-        var searchAndSort = new JPanel(new BorderLayout(JBUI.scale(8), 0));
-        var sortBox = new JComboBox<>(new String[]{"Best match","Name","Year"});
-        sortBox.addActionListener(e -> applyFilterAndSort());
-        var filterField = new JBTextField();
-        filterField.getEmptyText().setText("Filter results");
-        filterField.getDocument().addDocumentListener(new DocumentListener() {
-            private void changed() { applyFilterAndSort(); }
-            @Override public void insertUpdate(DocumentEvent e) { changed(); }
-            @Override public void removeUpdate(DocumentEvent e) { changed(); }
-            @Override public void changedUpdate(DocumentEvent e) { changed(); }
+        search.getEmptyText().setText(QilletniBundle.message("spotify.picker.search"));
+        search.getDocument().addDocumentListener(new DocumentAdapter() {
+            @Override
+            protected void textChanged(@NotNull DocumentEvent e) {
+                scheduleSearch();
+            }
         });
-
-        var searchPanel = new JPanel(new BorderLayout(JBUI.scale(8), 0));
-        search.getEmptyText().setText("Type to search Spotify");
-        search.getDocument().addDocumentListener(new DocumentListener() {
-            private void changed() { debounceTimer.restart(); }
-            @Override public void insertUpdate(DocumentEvent e) { changed(); }
-            @Override public void removeUpdate(DocumentEvent e) { changed(); }
-            @Override public void changedUpdate(DocumentEvent e) { changed(); }
+        filter.getEmptyText().setText(QilletniBundle.message("spotify.picker.filter"));
+        filter.getDocument().addDocumentListener(new DocumentAdapter() {
+            @Override
+            protected void textChanged(@NotNull DocumentEvent e) {
+                showResults();
+            }
         });
-        searchPanel.add(search, BorderLayout.CENTER);
-        searchAndSort.add(searchPanel, BorderLayout.CENTER);
+        sort.setRenderer(SimpleListCellRenderer.create("", s -> QilletniBundle.message(s.key)));
+        sort.addActionListener(e -> showResults());
 
-        var rightTools = new JPanel(new BorderLayout(JBUI.scale(8), 0));
-        rightTools.add(sortBox, BorderLayout.WEST);
-        rightTools.add(filterField, BorderLayout.CENTER);
-        searchAndSort.add(rightTools, BorderLayout.EAST);
+        var searchRow = new JPanel(new BorderLayout(JBUI.scale(8), 0));
+        searchRow.add(typeBox, BorderLayout.WEST);
+        searchRow.add(search, BorderLayout.CENTER);
 
-        north.add(searchAndSort, BorderLayout.CENTER);
+        var refineRow = new JPanel(new BorderLayout(JBUI.scale(8), 0));
+        refineRow.add(filter, BorderLayout.CENTER);
+        refineRow.add(sort, BorderLayout.EAST);
+
+        retryButton.addActionListener(e -> scheduleSearch());
+        signInButton.addActionListener(e -> {
+            signInButton.setEnabled(false);
+            SpotifyAuthService.getInstance().signInWithProgress(project, () -> {
+                signInButton.setEnabled(true);
+                updateSignInState();
+                if (SpotifyAuthService.getInstance().isSignedIn()) scheduleSearch();
+            });
+        });
+        settingsButton.addActionListener(e -> {
+            ShowSettingsUtil.getInstance().showSettingsDialog(project, QilletniSpotifyConfigurable.class);
+            updateSignInState();
+        });
+        var messageRow = new JPanel(new FlowLayout(FlowLayout.LEFT, JBUI.scale(6), 0));
+        messageRow.add(message);
+        messageRow.add(retryButton);
+        messageRow.add(signInButton);
+        messageRow.add(settingsButton);
+
+        var north = new JPanel(new BorderLayout(0, JBUI.scale(6)));
+        north.add(searchRow, BorderLayout.NORTH);
+        north.add(refineRow, BorderLayout.CENTER);
+        north.add(messageRow, BorderLayout.SOUTH);
+
+        list.setCellRenderer((lst, value, index, isSelected, cellHasFocus) -> renderChoice(value, isSelected));
+        list.getEmptyText().setText("");
+        list.addListSelectionListener(e -> getOKAction().setEnabled(list.getSelectedValue() != null));
+        list.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                if (e.getClickCount() == 2 && list.getSelectedValue() != null) doOKAction();
+            }
+        });
+        var scroll = ScrollPaneFactory.createScrollPane(list);
+        scroll.setPreferredSize(new Dimension(JBUI.scale(520), JBUI.scale(360)));
+
+        var panel = new JPanel(new BorderLayout(0, JBUI.scale(8)));
         panel.add(north, BorderLayout.NORTH);
-
-        // store components for later use
-        this.sortBoxRef = sortBox;
-        this.filterFieldRef = filterField;
-
-        // Error + token panel (hidden until needed)
-        var infoPanel = new JPanel(new BorderLayout());
-        errorLabel = new JBLabel("");
-        errorLabel.setForeground(UIManager.getColor("Label.errorForeground"));
-        errorLabel.setBorder(JBUI.Borders.empty(2));
-        infoPanel.add(errorLabel, BorderLayout.NORTH);
-        // Retry button for transient errors
-        var retryPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, JBUI.scale(4), 0));
-        retryButtonRef = new JButton("Retry");
-        retryButtonRef.addActionListener(e -> performSearch());
-        retryButtonRef.setVisible(false);
-        retryPanel.add(retryButtonRef);
-        infoPanel.add(retryPanel, BorderLayout.CENTER);
-        settingsPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, JBUI.scale(4), 0));
-        openSettingsButton = new JButton("Open Spotify Settings…");
-        openSettingsButton.addActionListener(e -> {
-            ShowSettingsUtil.getInstance().showSettingsDialog(project, "Qilletni: Spotify");
-        });
-        settingsPanel.add(openSettingsButton);
-        settingsPanel.setVisible(false);
-        infoPanel.add(settingsPanel, BorderLayout.SOUTH);
-        panel.add(infoPanel, BorderLayout.WEST);
-
-        // Center: results list with icon + two-line text
-        list.setCellRenderer((lst, value, index, isSelected, cellHasFocus) -> {
-            var root = new JPanel(new BorderLayout(JBUI.scale(6), 0));
-            root.setBorder(JBUI.Borders.empty(4));
-            var iconLabel = new JLabel();
-            iconLabel.setPreferredSize(new Dimension(JBUI.scale(24), JBUI.scale(24)));
-            if (value.imageUrl() != null) {
-                iconLabel.setIcon(getIcon(value.imageUrl()));
-            }
-            root.add(iconLabel, BorderLayout.WEST);
-            var textPanel = new JPanel(new BorderLayout());
-            var name = new JLabel(value.name());
-            name.setFont(name.getFont().deriveFont(Font.BOLD));
-            var secondary = switch (value.type()) {
-                case SONG, ALBUM -> String.join(", ", value.artists() == null ? java.util.List.of() : value.artists());
-                case COLLECTION -> value.owner() != null ? value.owner() : "";
-            };
-            var meta = new JLabel(secondary);
-            meta.setForeground(UIManager.getColor("Label.disabledForeground"));
-            textPanel.add(name, BorderLayout.NORTH);
-            textPanel.add(meta, BorderLayout.SOUTH);
-            root.add(textPanel, BorderLayout.CENTER);
-            if (isSelected) {
-                root.setBackground(lst.getSelectionBackground());
-                textPanel.setBackground(lst.getSelectionBackground());
-            }
-            return root;
-        });
-        panel.add(new JScrollPane(list), BorderLayout.CENTER);
-
-        // South: options
-        var south = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        south.add(includeSongKeyword);
-        panel.add(south, BorderLayout.SOUTH);
-
-        // If not signed in, reveal settings button
-        if (!SpotifyAuthService.getInstance().isSignedIn()) {
-            showError("Not signed in to Spotify. Open Settings to sign in.");
-            settingsPanel.setVisible(true);
-        }
+        panel.add(scroll, BorderLayout.CENTER);
+        panel.add(includeSongKeyword, BorderLayout.SOUTH);
         return panel;
     }
 
-    private Icon getIcon(String url) {
-        var cached = ICON_CACHE.get(url);
-        if (cached != null) return cached;
-        // Load async and return placeholder now
-        var placeholder = new JBLabel().getIcon();
-        CompletableFuture.runAsync(() -> {
-            try {
-                BufferedImage img = ImageIO.read(new URL(url));
-                if (img != null) {
-                    var size = JBUI.scale(24);
-                    Image scaled = img.getScaledInstance(size, size, Image.SCALE_SMOOTH);
-                    var icon = new JBImageIcon((Image) scaled);
-                    ICON_CACHE.put(url, icon);
-                    SwingUtilities.invokeLater(() -> {
-                        list.revalidate();
-                        list.repaint();
-                    });
-                }
-            } catch (Exception ignored) {}
-        });
-        return placeholder;
+    private JComponent renderChoice(MusicChoice value, boolean isSelected) {
+        var root = new JPanel(new BorderLayout(JBUI.scale(8), 0));
+        root.setBorder(JBUI.Borders.empty(4));
+        var icon = new JLabel(value.imageUrl() != null ? artworkFor(value.imageUrl()) : null);
+        icon.setPreferredSize(new Dimension(JBUI.scale(32), JBUI.scale(32)));
+        root.add(icon, BorderLayout.WEST);
+        var name = new JLabel(value.name());
+        name.setFont(name.getFont().deriveFont(Font.BOLD));
+        var meta = new JLabel(secondaryText(value) + (value.year() != null ? "  ·  " + value.year() : ""));
+        meta.setForeground(isSelected ? UIUtil.getListSelectionForeground(true) : UIUtil.getContextHelpForeground());
+        name.setForeground(UIUtil.getListForeground(isSelected, true));
+        var text = new JPanel(new BorderLayout());
+        text.setOpaque(false);
+        text.add(name, BorderLayout.NORTH);
+        text.add(meta, BorderLayout.SOUTH);
+        root.add(text, BorderLayout.CENTER);
+        root.setBackground(UIUtil.getListBackground(isSelected, true));
+        return root;
     }
 
-    private void showError(@Nullable String msg) {
-        errorLabel.setText(msg == null ? "" : msg);
-        errorLabel.setVisible(msg != null);
+    private static String secondaryText(MusicChoice choice) {
+        return switch (choice.type()) {
+            case SONG, ALBUM -> String.join(", ", choice.artists() == null ? List.of() : choice.artists());
+            case COLLECTION -> choice.owner() != null ? choice.owner() : "";
+        };
+    }
+
+    private Icon artworkFor(String url) {
+        synchronized (artwork) {
+            if (artwork.containsKey(url)) return artwork.get(url);
+            artwork.put(url, null); // loading
+        }
+        AppExecutorUtil.getAppExecutorService().execute(() -> {
+            try {
+                var bytes = HttpRequests.request(url).connectTimeout(5_000).readTimeout(10_000).readBytes(null);
+                var image = ImageIO.read(new ByteArrayInputStream(bytes));
+                if (image == null) return;
+                int size = JBUI.scale(32);
+                var icon = new JBImageIcon(image.getScaledInstance(size, size, Image.SCALE_SMOOTH));
+                synchronized (artwork) {
+                    artwork.put(url, icon);
+                }
+                ApplicationManager.getApplication().invokeLater(list::repaint, ModalityState.any());
+            } catch (IOException ignored) {
+                // Artwork is decorative; leave the placeholder
+            }
+        });
+        return null;
+    }
+
+    private void updateSignInState() {
+        var auth = SpotifyAuthService.getInstance();
+        if (auth.isSignedIn()) {
+            showMessage(null, false);
+        } else if (auth.getClientId() == null) {
+            showMessage(QilletniBundle.message("spotify.picker.notConfigured"), false);
+            settingsButton.setVisible(true);
+        } else {
+            showMessage(QilletniBundle.message("spotify.picker.notSignedIn"), false);
+            signInButton.setVisible(true);
+        }
+    }
+
+    private void showMessage(@Nullable String text, boolean retry) {
+        message.setText(text != null ? text : "");
+        message.setVisible(text != null);
+        retryButton.setVisible(retry);
+        signInButton.setVisible(false);
+        settingsButton.setVisible(false);
+    }
+
+    private void scheduleSearch() {
+        searchAlarm.cancelAllRequests();
+        searchAlarm.addRequest(this::performSearch, 300);
     }
 
     private void performSearch() {
-        String q = search.getText().trim();
-        model.clear();
-        if (q.isEmpty()) return;
-        if (!SpotifyAuthService.getInstance().isSignedIn()) {
-            showError("Not signed in to Spotify. Open Settings to sign in.");
-            settingsPanel.setVisible(true);
+        var query = search.getText().trim();
+        int generation = searchGeneration.incrementAndGet();
+        if (query.isEmpty()) {
+            results = List.of();
+            showResults();
             return;
         }
-        showError(null);
-        settingsPanel.setVisible(false);
-        CompletableFuture<java.util.List<MusicChoice>> cf;
-        switch (selectedType) {
-            case SONG -> cf = service.searchTracks(q, 25, 0);
-            case ALBUM -> cf = service.searchAlbums(q, 25, 0);
-            case COLLECTION -> cf = service.searchPlaylists(q, 25, 0);
-            default -> cf = CompletableFuture.completedFuture(java.util.List.of());
+        if (!SpotifyAuthService.getInstance().isSignedIn()) {
+            updateSignInState();
+            return;
         }
-        cf.thenAccept(this::setResults).exceptionally(ex -> {
-            handleError(ex);
-            return null;
-        });
-    }
-
-    private void applyFilterAndSort() {
-        // Apply simple client-side filter and sort on the current model
-        if (model.isEmpty()) return;
-        var filter = filterFieldRef != null ? filterFieldRef.getText().trim().toLowerCase() : "";
-        var sortKey = sortBoxRef != null ? (String) sortBoxRef.getSelectedItem() : "Best match";
-        // Snapshot current items
-        java.util.List<MusicChoice> items = new java.util.ArrayList<>();
-        for (int i = 0; i < model.getSize(); i++) items.add(model.getElementAt(i));
-        // Filter
-        if (!filter.isEmpty()) {
-            items.removeIf(mc -> {
-                var name = mc.name() != null ? mc.name().toLowerCase() : "";
-                var meta = switch (mc.type()) {
-                    case SONG, ALBUM -> String.join(", ", mc.artists() == null ? java.util.List.of() : mc.artists()).toLowerCase();
-                    case COLLECTION -> mc.owner() != null ? mc.owner().toLowerCase() : "";
-                };
-                return !(name.contains(filter) || meta.contains(filter));
-            });
-        }
-        // Sort
-        if ("Name".equals(sortKey)) {
-            items.sort(java.util.Comparator.comparing(mc -> mc.name() == null ? "" : mc.name(), String.CASE_INSENSITIVE_ORDER));
-        } else if ("Year".equals(sortKey)) {
-            items.sort((a, b) -> {
-                Integer ya = a.year() == null ? Integer.MIN_VALUE : a.year();
-                Integer yb = b.year() == null ? Integer.MIN_VALUE : b.year();
-                int cmp = Integer.compare(yb, ya); // desc
-                if (cmp != 0) return cmp;
-                return (a.name() == null ? "" : a.name()).compareToIgnoreCase(b.name() == null ? "" : b.name());
-            });
-        }
-        // Push back
-        model.clear();
-        for (var mc : items) model.addElement(mc);
-        if (!model.isEmpty()) list.setSelectedIndex(0);
-        list.revalidate();
-        list.repaint();
-    }
-
-    private void handleError(Throwable ex) {
-        // Inspect cause chain for SpotifyWebApiException or IO
-        Throwable cause = ex instanceof java.util.concurrent.CompletionException ? ex.getCause() : ex;
-        String msg = "Error contacting Spotify.";
-        if (cause != null) {
-            if (cause instanceof se.michaelthelin.spotify.exceptions.SpotifyWebApiException) {
-                var text = cause.getMessage() == null ? "" : cause.getMessage().toLowerCase();
-                if (text.contains("401") || text.contains("unauthorized") || text.contains("invalid access")) {
-                    msg = "Invalid or expired token. Please re‑sign in via Settings.";
-                    settingsPanel.setVisible(true);
-                } else if (text.contains("429") || text.contains("rate limit")) {
-                    msg = "Rate-limited by Spotify. Please retry shortly.";
-                } else {
-                    msg = "Spotify API error. Please retry.";
-                }
-            } else if (cause instanceof java.io.IOException) {
-                msg = "Network error. Check connection and Retry.";
-            }
-        }
-        final String fmsg = msg;
-        SwingUtilities.invokeLater(() -> {
-            showError(fmsg);
-            if (retryButtonRef != null) retryButtonRef.setVisible(true);
-        });
-    }
-
-    private void setResults(java.util.List<MusicChoice> results) {
-        SwingUtilities.invokeLater(() -> {
-            model.clear();
-            if (results == null || results.isEmpty()) {
-                showError("No results or an error occurred. Retry? ");
-                if (retryButtonRef != null) retryButtonRef.setVisible(true);
+        showMessage(null, false);
+        list.setPaintBusy(true);
+        CompletableFuture<List<MusicChoice>> future = switch (selectedType) {
+            case SONG -> service.searchTracks(query, 25, 0);
+            case ALBUM -> service.searchAlbums(query, 25, 0);
+            case COLLECTION -> service.searchPlaylists(query, 25, 0);
+        };
+        future.whenComplete((found, error) -> ApplicationManager.getApplication().invokeLater(() -> {
+            // A newer search was started; ignore this one's results
+            if (generation != searchGeneration.get()) return;
+            list.setPaintBusy(false);
+            if (error != null) {
+                showError(error);
                 return;
             }
-            showError(null);
-            if (retryButtonRef != null) retryButtonRef.setVisible(false);
-            for (var mc : results) model.addElement(mc);
-            if (!model.isEmpty()) list.setSelectedIndex(0);
-            applyFilterAndSort();
-        });
+            results = found != null ? found : List.of();
+            if (results.isEmpty()) showMessage(QilletniBundle.message("spotify.picker.noResults", query), false);
+            showResults();
+        }, ModalityState.any()));
+    }
+
+    private void showError(Throwable error) {
+        var cause = error instanceof CompletionException && error.getCause() != null ? error.getCause() : error;
+        if (cause instanceof se.michaelthelin.spotify.exceptions.SpotifyWebApiException) {
+            var text = cause.getMessage() == null ? "" : cause.getMessage().toLowerCase(Locale.ROOT);
+            if (text.contains("401") || text.contains("unauthorized") || text.contains("invalid access")) {
+                showMessage(QilletniBundle.message("spotify.picker.error.auth"), false);
+                signInButton.setVisible(true);
+            } else if (text.contains("429") || text.contains("rate limit")) {
+                showMessage(QilletniBundle.message("spotify.picker.error.rateLimit"), true);
+            } else {
+                showMessage(QilletniBundle.message("spotify.picker.error.api"), true);
+            }
+        } else if (cause instanceof IllegalStateException && !SpotifyAuthService.getInstance().isSignedIn()) {
+            updateSignInState();
+        } else {
+            showMessage(QilletniBundle.message("spotify.picker.error.network"), true);
+        }
+    }
+
+    /** Applies the local filter and sort to the last search results. */
+    private void showResults() {
+        var needle = filter.getText().trim().toLowerCase(Locale.ROOT);
+        var shown = new ArrayList<>(results);
+        if (!needle.isEmpty()) {
+            shown.removeIf(choice -> !(String.valueOf(choice.name()).toLowerCase(Locale.ROOT).contains(needle)
+                    || secondaryText(choice).toLowerCase(Locale.ROOT).contains(needle)));
+        }
+        var order = (Sort) sort.getSelectedItem();
+        if (order == Sort.NAME) {
+            shown.sort(Comparator.comparing(c -> String.valueOf(c.name()), String.CASE_INSENSITIVE_ORDER));
+        } else if (order == Sort.YEAR) {
+            shown.sort(Comparator.comparing((MusicChoice c) -> c.year() == null ? Integer.MIN_VALUE : c.year()).reversed());
+        }
+        var previous = list.getSelectedValue();
+        model.clear();
+        shown.forEach(model::addElement);
+        if (previous != null && shown.contains(previous)) list.setSelectedValue(previous, true);
+        else if (!shown.isEmpty()) list.setSelectedIndex(0);
+        getOKAction().setEnabled(list.getSelectedValue() != null);
     }
 
     @Override

@@ -1,0 +1,25 @@
+<templateSet group="Qilletni">
+  <template name="fun" value="fun $NAME$($PARAMS$) {&#10;    $END$&#10;}" description="Function" toReformat="false" toShortenFQNames="false">
+    <variable name="NAME" expression="" defaultValue="&quot;name&quot;" alwaysStopAt="true"/>
+    <variable name="PARAMS" expression="" defaultValue="" alwaysStopAt="true"/>
+    <context><option name="Qilletni" value="true"/></context>
+  </template>
+  <template name="entity" value="entity $NAME$ {&#10;    $END$&#10;&#10;    $NAME$()&#10;}" description="Entity with constructor" toReformat="false" toShortenFQNames="false">
+    <variable name="NAME" expression="" defaultValue="&quot;Name&quot;" alwaysStopAt="true"/>
+    <context><option name="Qilletni" value="true"/></context>
+  </template>
+  <template name="for" value="for ($VAR$ : $ITERABLE$) {&#10;    $END$&#10;}" description="For each" toReformat="false" toShortenFQNames="false">
+    <variable name="VAR" expression="" defaultValue="&quot;item&quot;" alwaysStopAt="true"/>
+    <variable name="ITERABLE" expression="" defaultValue="" alwaysStopAt="true"/>
+    <context><option name="Qilletni" value="true"/></context>
+  </template>
+  <template name="fori" value="for ($VAR$..$END_VALUE$) {&#10;    $END$&#10;}" description="For range" toReformat="false" toShortenFQNames="false">
+    <variable name="VAR" expression="" defaultValue="&quot;i&quot;" alwaysStopAt="true"/>
+    <variable name="END_VALUE" expression="" defaultValue="&quot;10&quot;" alwaysStopAt="true"/>
+    <context><option name="Qilletni" value="true"/></context>
+  </template>
+  <template name="if" value="if ($CONDITION$) {&#10;    $END$&#10;}" description="If statement" toReformat="false" toShortenFQNames="false">
+    <variable name="CONDITION" expression="" defaultValue="" alwaysStopAt="true"/>
+    <context><option name="Qilletni" value="true"/></context>
+  </template>
+</templateSet>

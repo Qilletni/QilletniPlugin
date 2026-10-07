@@ -1,7 +1,19 @@
 package dev.qilletni.intellij.spotify.auth;
 
 import com.intellij.ide.BrowserUtil;
+import com.intellij.credentialStore.CredentialAttributes;
+import com.intellij.credentialStore.CredentialAttributesKt;
+import com.intellij.ide.passwordSafe.PasswordSafe;
 import com.intellij.ide.util.PropertiesComponent;
+import com.intellij.notification.NotificationType;
+import com.intellij.openapi.progress.ProgressIndicator;
+import com.intellij.openapi.progress.Task;
+import com.intellij.openapi.project.ProjectManager;
+import com.intellij.util.concurrency.AppExecutorUtil;
+import dev.qilletni.intellij.QilletniBundle;
+import dev.qilletni.intellij.packages.QilletniAccountsListener;
+import dev.qilletni.intellij.packages.QilletniNotifications;
+import dev.qilletni.intellij.settings.QilletniPersistence;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.components.Service;
 import com.intellij.openapi.diagnostic.Logger;
@@ -25,22 +37,32 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 /**
- * Application-level service managing Spotify OAuth (Authorization Code with PKCE),
- * persisting client ID, selected port, and refresh token via PropertiesComponent.
- * Access tokens are cached in-memory until expiry.
+ * Application-level service managing Spotify OAuth (Authorization Code with PKCE) for the IDE's music search.
+ * <p>
+ * The Client ID and redirect URI are shared with the Qilletni Spotify package: they live in
+ * {@code ~/.qilletni/persistence/spotify.properties} (what {@code qilletni persist spotify ...} writes), so one
+ * Spotify app registration and redirect URI serve both the IDE and running programs. The IDE's refresh token is
+ * stored in the IDE password safe. Access tokens are cached in memory until expiry.
  */
 @Service
 public final class SpotifyAuthService {
     private static final Logger LOG = Logger.getInstance(SpotifyAuthService.class);
-    private static final String KEY_CLIENT_ID = "qilletni.spotify.clientId";
-    private static final String KEY_PORT = "qilletni.spotify.port";
-    private static final String KEY_REFRESH = "qilletni.spotify.refreshToken";
+    public static final String PACKAGE = "spotify";
+    public static final String DEFAULT_REDIRECT_URI = "http://127.0.0.1:8088/spotify";
 
-    private final ExecutorService exec = Executors.newCachedThreadPool();
-    private final java.util.concurrent.ScheduledExecutorService scheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
+    // Settings used by earlier plugin versions; read once for migration
+    private static final String LEGACY_CLIENT_ID = "qilletni.spotify.clientId";
+    private static final String LEGACY_PORT = "qilletni.spotify.port";
+    private static final String LEGACY_REFRESH = "qilletni.spotify.refreshToken";
+    private static final CredentialAttributes REFRESH_TOKEN = new CredentialAttributes(
+            CredentialAttributesKt.generateServiceName("Qilletni", "Spotify refresh token"));
+
+    private final ExecutorService exec = AppExecutorUtil.createBoundedApplicationPoolExecutor("Qilletni Spotify", 4);
+    private final java.util.concurrent.ScheduledExecutorService scheduler = AppExecutorUtil.getAppScheduledExecutorService();
+    private volatile @Nullable String cachedRefreshToken;
+    private volatile boolean refreshTokenLoaded;
 
     private volatile @Nullable String accessToken;
     private volatile long accessTokenExpiryEpochSeconds = 0L;
@@ -54,15 +76,50 @@ public final class SpotifyAuthService {
         return ApplicationManager.getApplication().getService(SpotifyAuthService.class);
     }
 
-    // Settings-backed values
-    public @Nullable String getClientId() { return normalize(PropertiesComponent.getInstance().getValue(KEY_CLIENT_ID)); }
-    public void setClientId(@Nullable String id) { PropertiesComponent.getInstance().setValue(KEY_CLIENT_ID, normalize(id)); }
+    /** The Spotify Client ID shared with the Qilletni Spotify package. */
+    public @Nullable String getClientId() {
+        var id = QilletniPersistence.get(PACKAGE, "clientId");
+        return id != null ? id : normalize(PropertiesComponent.getInstance().getValue(LEGACY_CLIENT_ID));
+    }
 
-    public int getPort() { return PropertiesComponent.getInstance().getInt(KEY_PORT, 48888); }
-    public void setPort(int port) { PropertiesComponent.getInstance().setValue(KEY_PORT, String.valueOf(port)); }
+    /** The redirect URI shared with the Qilletni Spotify package; it must be registered in the Spotify app. */
+    public @NotNull String getRedirectUri() {
+        var uri = QilletniPersistence.get(PACKAGE, "redirectUri");
+        if (uri != null) return uri;
+        var legacyPort = PropertiesComponent.getInstance().getValue(LEGACY_PORT);
+        return legacyPort != null ? "http://127.0.0.1:" + legacyPort + "/callback" : DEFAULT_REDIRECT_URI;
+    }
 
-    private @Nullable String getRefreshToken() { return normalize(PropertiesComponent.getInstance().getValue(KEY_REFRESH)); }
-    private void saveRefreshToken(@Nullable String rt) { PropertiesComponent.getInstance().setValue(KEY_REFRESH, normalize(rt)); }
+    /** Saves the Client ID and redirect URI where both the IDE and Qilletni programs read them. */
+    public void saveAppSettings(@Nullable String clientId, @Nullable String redirectUri) throws IOException {
+        QilletniPersistence.update(PACKAGE, Map.of(
+                "clientId", Objects.requireNonNullElse(normalize(clientId), ""),
+                "redirectUri", Objects.requireNonNullElse(normalize(redirectUri), "")));
+        PropertiesComponent.getInstance().unsetValue(LEGACY_CLIENT_ID);
+        PropertiesComponent.getInstance().unsetValue(LEGACY_PORT);
+    }
+
+    private @Nullable String getRefreshToken() {
+        if (!refreshTokenLoaded) {
+            var stored = PasswordSafe.getInstance().getPassword(REFRESH_TOKEN);
+            var legacy = normalize(PropertiesComponent.getInstance().getValue(LEGACY_REFRESH));
+            if (stored == null && legacy != null) {
+                PasswordSafe.getInstance().setPassword(REFRESH_TOKEN, legacy);
+                stored = legacy;
+            }
+            PropertiesComponent.getInstance().unsetValue(LEGACY_REFRESH);
+            cachedRefreshToken = normalize(stored);
+            refreshTokenLoaded = true;
+        }
+        return cachedRefreshToken;
+    }
+
+    private void saveRefreshToken(@Nullable String rt) {
+        cachedRefreshToken = normalize(rt);
+        refreshTokenLoaded = true;
+        PasswordSafe.getInstance().setPassword(REFRESH_TOKEN, cachedRefreshToken);
+        QilletniAccountsListener.fire();
+    }
 
     public boolean isSignedIn() { return getRefreshToken() != null; }
 
@@ -89,11 +146,64 @@ public final class SpotifyAuthService {
         cancelSignIn();
     }
 
-    public CompletableFuture<Void> signIn(@NotNull Project project) {
+    /**
+     * Signs in with the system browser, showing progress with a cancel button and a notification with the outcome.
+     *
+     * @param onFinished called on the EDT when the flow ends, successfully or not
+     */
+    public void signInWithProgress(@Nullable Project project, @Nullable Runnable onFinished) {
+        var flow = signIn();
+        new Task.Backgroundable(project, QilletniBundle.message("spotify.signIn.progress"), true) {
+            @Override
+            public void run(@NotNull ProgressIndicator indicator) {
+                indicator.setText2(QilletniBundle.message("spotify.signIn.progress.details"));
+                while (!flow.isDone()) {
+                    if (indicator.isCanceled()) {
+                        cancelSignIn();
+                        break;
+                    }
+                    try {
+                        flow.get(200, java.util.concurrent.TimeUnit.MILLISECONDS);
+                    } catch (java.util.concurrent.TimeoutException ignored) {
+                        // keep waiting
+                    } catch (Exception e) {
+                        break;
+                    }
+                }
+            }
+
+            @Override
+            public void onFinished() {
+                if (flow.isCompletedExceptionally() && !flow.isCancelled()) {
+                    var cause = flow.exceptionNow();
+                    if (!(cause instanceof java.util.concurrent.CancellationException)) {
+                        QilletniNotifications.group()
+                                .createNotification(QilletniBundle.message("spotify.signIn.failed", cause.getMessage()), NotificationType.ERROR)
+                                .addAction(QilletniNotifications.openSettingsAction(project != null ? project : ProjectManager.getInstance().getDefaultProject()))
+                                .notify(project);
+                    }
+                } else if (flow.isDone() && !flow.isCompletedExceptionally()) {
+                    QilletniNotifications.group()
+                            .createNotification(QilletniBundle.message("spotify.signIn.success"), NotificationType.INFORMATION)
+                            .notify(project);
+                }
+                if (onFinished != null) onFinished.run();
+            }
+        }.queue();
+    }
+
+    public CompletableFuture<Void> signIn() {
         var clientId = getClientId();
-        if (clientId == null) return CompletableFuture.failedFuture(new IllegalStateException("Client ID not set"));
-        int port = getPort();
-        var redirectUri = "http://127.0.0.1:" + port + "/callback";
+        if (clientId == null) return CompletableFuture.failedFuture(new IllegalStateException(QilletniBundle.message("spotify.signIn.noClientId")));
+        var redirectUri = getRedirectUri();
+        URI redirect;
+        try {
+            redirect = URI.create(redirectUri);
+        } catch (IllegalArgumentException e) {
+            return CompletableFuture.failedFuture(new IllegalStateException(QilletniBundle.message("spotify.signIn.badRedirect", redirectUri)));
+        }
+        int port = redirect.getPort() > 0 ? redirect.getPort() : 80;
+        var callbackPath = redirect.getPath() == null || redirect.getPath().isEmpty() ? "/" : redirect.getPath();
 
         var verifier = randomUrlSafe(64);
         var challenge = base64UrlNoPad(sha256(verifier));
@@ -107,10 +217,10 @@ public final class SpotifyAuthService {
         exec.submit(() -> {
             com.sun.net.httpserver.HttpServer server = null;
             try {
-                server = com.sun.net.httpserver.HttpServer.create(new InetSocketAddress("127.0.0.1", port), 0);
+                server = com.sun.net.httpserver.HttpServer.create(new InetSocketAddress(redirect.getHost(), port), 0);
                 currentServer = server;
             } catch (IOException e) {
-                result.completeExceptionally(new IOException("Failed to bind port " + port + ": " + e.getMessage(), e));
+                result.completeExceptionally(new IOException(QilletniBundle.message("spotify.signIn.portInUse", port, e.getMessage()), e));
                 currentSignIn = null;
                 return;
             }
@@ -119,7 +229,7 @@ public final class SpotifyAuthService {
                 BrowserUtil.browse(URI.create(authUrl));
 
                 var finalServer = server;
-                server.createContext("/callback", exchange -> {
+                server.createContext(callbackPath, exchange -> {
                     try {
                         var query = exchange.getRequestURI().getRawQuery();
                         Map<String, String> params = splitQuery(query);
@@ -144,14 +254,14 @@ public final class SpotifyAuthService {
                         accessToken = token.accessToken();
                         accessTokenExpiryEpochSeconds = Instant.now().getEpochSecond() + token.expiresIn();
                         if (token.refreshToken() != null && !token.refreshToken().isBlank()) saveRefreshToken(token.refreshToken());
-                        respond(exchange, 200, "Signed in. You can close this tab.");
+                        respond(exchange, 200, "Signed in to Spotify for Qilletni. You can close this tab and return to the IDE.");
                         result.complete(null);
                     } catch (Exception ex) {
                         LOG.warn("Spotify callback error", ex);
                         try { respond(exchange, 500, "Internal error"); } catch (Exception ignored) {}
                         result.completeExceptionally(ex);
                     } finally {
-                        try { finalServer.removeContext("/callback"); } catch (Exception ignored) {}
+                        try { finalServer.removeContext(callbackPath); } catch (Exception ignored) {}
                         try { finalServer.stop(0); } catch (Exception ignored) {}
                         currentServer = null;
                         if (timeoutFuture != null) { timeoutFuture.cancel(true); timeoutFuture = null; }
@@ -163,7 +273,8 @@ public final class SpotifyAuthService {
 
                 // Auto-timeout in case user closes the browser tab or never completes
                 timeoutFuture = scheduler.schedule(() -> {
-                    LOG.warn("Spotify sign-in timed out; canceling in-progress flow");
+                    LOG.info("Spotify sign-in timed out; canceling in-progress flow");
+                    if (!result.isDone()) result.completeExceptionally(new IllegalStateException(QilletniBundle.message("spotify.signIn.timeout")));
                     cancelSignIn();
                 }, 120, java.util.concurrent.TimeUnit.SECONDS);
             } catch (Exception ex) {

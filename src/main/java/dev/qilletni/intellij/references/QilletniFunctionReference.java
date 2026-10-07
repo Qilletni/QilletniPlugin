@@ -8,12 +8,12 @@ import com.intellij.psi.util.PsiTreeUtil;
 import dev.qilletni.intellij.QilletniFile;
 import dev.qilletni.intellij.psi.QilletniFunctionDef;
 import dev.qilletni.intellij.psi.QilletniFunctionName;
+import dev.qilletni.intellij.psi.impl.QilletniElementFactory;
 import dev.qilletni.intellij.resolve.QilletniIndexFacade;
 import dev.qilletni.intellij.resolve.QilletniResolveUtil;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -33,12 +33,7 @@ public final class QilletniFunctionReference extends PsiReferenceBase<PsiElement
 
     @Override
     public PsiElement handleElementRename(@NotNull String newElementName) {
-        var el = getElement();
-        if (el.getNode() != null) {
-            var leaf = new com.intellij.psi.impl.source.tree.LeafPsiElement(dev.qilletni.intellij.psi.QilletniTypes.ID, newElementName);
-            el.replace(leaf);
-        }
-        return el;
+        return QilletniElementFactory.renameIdentifier(getElement(), newElementName);
     }
 
     @Override

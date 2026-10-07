@@ -3,41 +3,60 @@ package dev.qilletni.intellij.project;
 import com.intellij.ide.wizard.AbstractNewProjectWizardStep;
 import com.intellij.ide.wizard.NewProjectWizardStep;
 import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.application.WriteAction;
 import com.intellij.openapi.diagnostic.Logger;
+import com.intellij.openapi.module.Module;
+import com.intellij.openapi.module.ModuleManager;
+import com.intellij.openapi.module.StdModuleTypes;
+import com.intellij.openapi.options.ShowSettingsUtil;
 import com.intellij.openapi.progress.ProgressIndicator;
 import com.intellij.openapi.progress.ProgressManager;
 import com.intellij.openapi.progress.Task;
 import com.intellij.openapi.project.Project;
+import com.intellij.openapi.project.ProjectManager;
+import com.intellij.openapi.roots.ContentEntry;
+import com.intellij.openapi.roots.ModuleRootManager;
+import com.intellij.openapi.ui.ValidationInfo;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VfsUtil;
 import com.intellij.openapi.vfs.VirtualFile;
-import com.intellij.openapi.application.WriteAction;
-import com.intellij.openapi.module.Module;
-import com.intellij.openapi.module.ModuleManager;
-import com.intellij.openapi.module.StdModuleTypes;
-import com.intellij.openapi.roots.ContentEntry;
-import com.intellij.openapi.roots.ModuleRootManager;
-import com.intellij.ui.dsl.builder.Panel;
+import com.intellij.ui.components.JBCheckBox;
+import com.intellij.ui.components.JBRadioButton;
+import com.intellij.ui.components.JBTextField;
 import com.intellij.ui.dsl.builder.AlignX;
+import com.intellij.ui.dsl.builder.Panel;
+import com.intellij.ui.dsl.builder.Row;
+import dev.qilletni.intellij.QilletniBundle;
+import dev.qilletni.intellij.library.QilletniProjectDependencies;
+import dev.qilletni.intellij.settings.QilletniConfigurable;
+import dev.qilletni.intellij.toolchain.QilletniToolchainLauncher;
+import kotlin.Unit;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
-import javax.swing.*;
-import java.awt.*;
-import java.nio.file.Files;
+import javax.swing.ButtonGroup;
+import javax.swing.JPanel;
+import java.awt.FlowLayout;
 import java.util.List;
+import java.util.Objects;
+import java.util.regex.Pattern;
 
 /**
- * Collects options and runs the toolchain init. Logs are shown only when errors occur.
+ * Qilletni options in File | New | Project: application or library, scope, author and native bindings. Runs
+ * {@code qilletni init} into the new project directory. Everything is validated before the project is created.
  */
 public final class QilletniNewProjectWizardStep extends AbstractNewProjectWizardStep {
     private static final Logger LOG = Logger.getInstance(QilletniNewProjectWizardStep.class);
+    private static final Pattern NAME_PART = Pattern.compile("[A-Za-z0-9_-]+");
 
-    private JTextField authorField;
-    private JRadioButton appRadio;
-    private JRadioButton libRadio;
-    private JCheckBox nativeToggle;
-    private com.intellij.ui.components.JBTextField nativeInitClassField;
-    private JPanel nativeInitPanel;
+    private final JBRadioButton appRadio = new JBRadioButton(QilletniBundle.message("wizard.type.application"), true);
+    private final JBRadioButton libRadio = new JBRadioButton(QilletniBundle.message("wizard.type.library"));
+    private final JBTextField scopeField = new JBTextField(sanitize(System.getProperty("user.name", "")), 24);
+    private final JBTextField authorField = new JBTextField(System.getProperty("user.name", ""), 24);
+    private final JBCheckBox nativeToggle = new JBCheckBox(QilletniBundle.message("wizard.native"));
+    private final JBTextField nativeClassField = new JBTextField(24);
+    private Row scopeRow;
+    private Row nativeClassRow;
 
     public enum ProjectType {
         APPLICATION("application"),
@@ -60,180 +79,173 @@ public final class QilletniNewProjectWizardStep extends AbstractNewProjectWizard
 
     @Override
     public void setupUI(@NotNull Panel panel) {
-        authorField = new JTextField(System.getProperty("user.name", ""), 24);
-        appRadio = new JRadioButton("Application", true);
-        libRadio = new JRadioButton("Library");
         var group = new ButtonGroup();
         group.add(appRadio);
         group.add(libRadio);
-        nativeToggle = new JCheckBox();
+        nativeClassField.getEmptyText().setText("com.example.MyNatives");
 
-        panel.row("Author:", row -> {
-            row.cell(authorField).align(AlignX.FILL).resizableColumn();
-            return kotlin.Unit.INSTANCE;
-        });
-        panel.row("Project type:", row -> {
-            var typePanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
-            typePanel.add(appRadio);
-            typePanel.add(libRadio);
-            row.cell(typePanel);
-            return kotlin.Unit.INSTANCE;
-        });
-        panel.row("Include native bindings:", row -> {
-            row.cell(nativeToggle);
-            return kotlin.Unit.INSTANCE;
-        });
-        // Native init class (FQCN) row, initially hidden
-        nativeInitClassField = new com.intellij.ui.components.JBTextField();
-        nativeInitClassField.getEmptyText().setText("e.g., com.example.NativeInitializer");
-        nativeInitPanel = new JPanel(new BorderLayout(8, 0));
-        nativeInitPanel.add(new JLabel("Native init class (FQCN):"), BorderLayout.WEST);
-        nativeInitPanel.add(nativeInitClassField, BorderLayout.CENTER);
-        nativeInitPanel.setVisible(false);
-        panel.row("", row -> {
-            row.cell(nativeInitPanel).align(AlignX.FILL).resizableColumn();
-            return kotlin.Unit.INSTANCE;
-        });
-        nativeToggle.addActionListener(e -> {
-            var visible = nativeToggle.isSelected();
-            nativeInitPanel.setVisible(visible);
-            if (visible) nativeInitClassField.requestFocusInWindow();
-            else nativeInitClassField.setText("");
-            nativeInitPanel.revalidate();
-            nativeInitPanel.repaint();
-        });
-    }
-
-
-    @Override
-    public void setupProject(@NotNull com.intellij.openapi.project.Project project) {
-        var ctx = getContext();
-        var baseDir = ctx.getProjectDirectory();
-        var projectName = ctx.getProjectName();
-        var author = authorField.getText().trim();
-        var type = libRadio.isSelected() ? ProjectType.LIBRARY : ProjectType.APPLICATION;
-        var includeNative = nativeToggle.isSelected();
-        String nativeInitClass = null;
-        if (includeNative) {
-            var text = nativeInitClassField != null ? nativeInitClassField.getText().trim() : "";
-            if (text.isEmpty() || !isValidJavaFqcn(text)) {
-                com.intellij.openapi.ui.Messages.showErrorDialog("Please enter a valid Java fully-qualified class name (no '$', identifiers separated by dots).", "Invalid Native Init Class");
-                return;
-            }
-            nativeInitClass = text;
+        var toolchainProblem = QilletniToolchainLauncher.findProblem(null);
+        if (toolchainProblem != null) {
+            panel.row("", row -> {
+                row.comment("<icon src='AllIcons.General.Warning'>&nbsp;" + toolchainProblem
+                        + " <a href='settings'>" + QilletniBundle.message("action.configure") + "</a>", 80,
+                        e -> ShowSettingsUtil.getInstance().showSettingsDialog(ProjectManager.getInstance().getDefaultProject(), QilletniConfigurable.class));
+                return Unit.INSTANCE;
+            });
         }
 
-        final String nativeInitClassFinal = nativeInitClass;
-        ProgressManager.getInstance().run(new Task.Modal(null, "Creating Qilletni Project", true) {
-            @Override public void run(@NotNull ProgressIndicator indicator) {
-                try {
-                    try { Files.createDirectories(baseDir.getParent()); } catch (Exception ignore) {}
-                    var res = QilletniProjectInitRunner.runInitCapture(
-                            project,
-                            baseDir,
-                            projectName,
-                            author,
-                            type,
-                            includeNative,
-                            nativeInitClassFinal,
-                            indicator
-                    );
-                    var vf = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(baseDir.toFile());
-                    if (vf != null) VfsUtil.markDirtyAndRefresh(false, true, true, vf);
+        panel.row(QilletniBundle.message("wizard.type"), row -> {
+            var types = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+            types.add(appRadio);
+            types.add(libRadio);
+            row.cell(types);
+            return Unit.INSTANCE;
+        });
+        scopeRow = panel.row(QilletniBundle.message("wizard.scope"), row -> {
+            row.cell(scopeField)
+                    .comment(QilletniBundle.message("wizard.scope.hint"), 60, e -> {})
+                    .validationOnApply((builder, field) -> libRadio.isSelected() ? validateScope(field.getText()) : null);
+            return Unit.INSTANCE;
+        });
+        panel.row(QilletniBundle.message("wizard.author"), row -> {
+            row.cell(authorField).align(AlignX.FILL).resizableColumn()
+                    .validationOnApply((builder, field) -> field.getText().isBlank()
+                            ? new ValidationInfo(QilletniBundle.message("wizard.author.required"), field) : null);
+            return Unit.INSTANCE;
+        });
+        panel.row("", row -> {
+            row.cell(nativeToggle).comment(QilletniBundle.message("wizard.native.hint"), 60, e -> {});
+            return Unit.INSTANCE;
+        });
+        nativeClassRow = panel.row(QilletniBundle.message("wizard.nativeClass"), row -> {
+            row.cell(nativeClassField).align(AlignX.FILL).resizableColumn()
+                    .validationOnApply((builder, field) -> nativeToggle.isSelected() && !isValidJavaFqcn(field.getText().trim())
+                            ? new ValidationInfo(QilletniBundle.message("wizard.nativeClass.invalid"), field) : null);
+            return Unit.INSTANCE;
+        });
 
-                    if (res.success()) {
-                        // Ensure module/content root exists and mark 'qilletni-src' as a Sources root
-                        configureProjectRoots(project, vf, type);
-                        ApplicationManager.getApplication().invokeLater(() -> QilletniPostInitOpener.openPrimaryFile(vf));
-                    } else {
-                        ApplicationManager.getApplication().invokeLater(() -> {
-                            var dlg = new QilletniInitLogDialog("Qilletni project creation failed (" + res.exitCode() + ")");
-                            dlg.append(res.output());
-                            dlg.show();
-                        });
-                    }
-                } catch (Exception ex) {
-                    LOG.warn("Qilletni init failed", ex);
+        Runnable updateVisibility = () -> {
+            scopeRow.visible(libRadio.isSelected());
+            nativeClassRow.visible(nativeToggle.isSelected());
+        };
+        appRadio.addActionListener(e -> updateVisibility.run());
+        libRadio.addActionListener(e -> updateVisibility.run());
+        nativeToggle.addActionListener(e -> {
+            updateVisibility.run();
+            if (nativeToggle.isSelected()) nativeClassField.requestFocusInWindow();
+        });
+        updateVisibility.run();
+    }
+
+    private @Nullable ValidationInfo validateScope(String scope) {
+        if (scope.isBlank()) return new ValidationInfo(QilletniBundle.message("wizard.scope.required"), scopeField);
+        if (!NAME_PART.matcher(scope.trim()).matches()) return new ValidationInfo(QilletniBundle.message("wizard.scope.invalid"), scopeField);
+        return null;
+    }
+
+    @Override
+    public void setupProject(@NotNull Project project) {
+        var baseDir = getContext().getProjectDirectory();
+        var name = sanitize(getContext().getProjectName());
+        var type = libRadio.isSelected() ? ProjectType.LIBRARY : ProjectType.APPLICATION;
+        var qualifiedName = type == ProjectType.LIBRARY ? scopeField.getText().trim() + "/" + name : name;
+
+        var args = new java.util.ArrayList<>(List.of("init", qualifiedName,
+                "--dir", baseDir.toAbsolutePath().toString(),
+                "--author", authorField.getText().trim(),
+                "--type", type.getCLIName()));
+        if (nativeToggle.isSelected()) {
+            args.add("--native-class");
+            args.add(nativeClassField.getText().trim());
+        }
+
+        ProgressManager.getInstance().run(new Task.Modal(project, QilletniBundle.message("wizard.progress"), true) {
+            @Override
+            public void run(@NotNull ProgressIndicator indicator) {
+                var result = QilletniProjectInitRunner.run(project, args, indicator);
+                var baseVf = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(baseDir);
+                if (baseVf != null) VfsUtil.markDirtyAndRefresh(false, true, true, baseVf);
+
+                if (!result.success()) {
                     ApplicationManager.getApplication().invokeLater(() -> {
-                        var dlg = new QilletniInitLogDialog("Qilletni project creation failed");
-                        dlg.append(ex.getMessage() != null ? ex.getMessage() : ex.toString());
-                        dlg.show();
+                        var dialog = new QilletniInitLogDialog(QilletniBundle.message("wizard.failed", result.exitCode()));
+                        dialog.append(result.output());
+                        dialog.show();
                     });
+                    return;
                 }
+                configureProjectRoots(project, baseVf, type);
+                QilletniProjectDependencies.getInstance(project).refresh();
+                ApplicationManager.getApplication().invokeLater(() -> QilletniPostInitOpener.openPrimaryFile(project, baseVf, type), project.getDisposed());
             }
         });
     }
 
-    private void configureProjectRoots(@NotNull Project project, VirtualFile baseVf, ProjectType type) {
+    private static void configureProjectRoots(@NotNull Project project, @Nullable VirtualFile baseVf, ProjectType type) {
         if (baseVf == null || !baseVf.isDirectory()) return;
 
         WriteAction.runAndWait(() -> {
-            // Ensure there is at least one module
             Module module;
             var moduleManager = ModuleManager.getInstance(project);
             var modules = moduleManager.getModules();
             if (modules.length == 0) {
-                var basePath = project.getBasePath();
-                var imlPath = (basePath != null ? basePath : baseVf.getPath()) + "/.idea/qilletni.iml";
-                module = moduleManager.newModule(imlPath, StdModuleTypes.JAVA.getId());
+                var basePath = Objects.requireNonNullElse(project.getBasePath(), baseVf.getPath());
+                module = moduleManager.newModule(basePath + "/.idea/qilletni.iml", StdModuleTypes.JAVA.getId());
             } else {
                 module = modules[0];
             }
 
             var model = ModuleRootManager.getInstance(module).getModifiableModel();
             try {
-                // Ensure project base is a content root
                 ContentEntry contentEntry = null;
                 var baseUrl = VfsUtil.pathToUrl(baseVf.getPath());
-                for (var ce : model.getContentEntries()) {
-                    if (ce.getUrl().equals(baseUrl)) { contentEntry = ce; break; }
-                    var ceFile = ce.getFile();
-                    if (ceFile != null && VfsUtil.isAncestor(ceFile, baseVf, false)) { contentEntry = ce; break; }
+                for (var entry : model.getContentEntries()) {
+                    var entryFile = entry.getFile();
+                    if (entry.getUrl().equals(baseUrl) || entryFile != null && VfsUtil.isAncestor(entryFile, baseVf, false)) {
+                        contentEntry = entry;
+                        break;
+                    }
                 }
                 if (contentEntry == null) {
                     contentEntry = model.addContentEntry(baseUrl);
-                    // Common excludes for cleanliness
-                    var excludes = new String[]{".idea", ".git"}; // Add build/out dirs if needed later on (Qilletni doesn't really do that)
-                    for (var ex : excludes) {
-                        var child = baseVf.findChild(ex);
+                    for (var excluded : List.of(".idea", ".git", "build")) {
+                        var child = baseVf.findChild(excluded);
                         if (child != null) contentEntry.addExcludeFolder(child.getUrl());
                     }
                 }
 
-                // Mark sources
-                var sourceDirs = switch (type) {
-                    case LIBRARY -> List.of("qilletni-src", "examples");
-                    case APPLICATION -> List.of("qilletni-src");
-                };
-
+                var sourceDirs = type == ProjectType.LIBRARY ? List.of("qilletni-src", "examples") : List.of("qilletni-src");
                 for (var sourceDir : sourceDirs) {
-                    var qlSrc = baseVf.findChild(sourceDir);
-                    if (qlSrc != null && qlSrc.isDirectory()) {
-                        var srcUrl = qlSrc.getUrl();
-                        var exists = false;
-                        for (var sf : contentEntry.getSourceFolders()) {
-                            if (java.util.Objects.equals(sf.getUrl(), srcUrl)) { exists = true; break; }
+                    var dir = baseVf.findChild(sourceDir);
+                    if (dir == null || !dir.isDirectory()) continue;
+                    var url = dir.getUrl();
+                    boolean exists = false;
+                    for (var folder : contentEntry.getSourceFolders()) {
+                        if (url.equals(folder.getUrl())) {
+                            exists = true;
+                            break;
                         }
-                        if (!exists) contentEntry.addSourceFolder(srcUrl, false);
                     }
+                    if (!exists) contentEntry.addSourceFolder(url, false);
                 }
             } finally {
-                // Commit model changes inside the same write action
                 model.commit();
             }
         });
     }
 
+    /** Project names become package names, so keep them to letters, digits, '-' and '_'. */
+    private static String sanitize(@Nullable String name) {
+        if (name == null) return "";
+        return name.trim().replaceAll("[^A-Za-z0-9_-]+", "-").replaceAll("^-+|-+$", "");
+    }
+
     private static boolean isValidJavaFqcn(String s) {
-        if (s == null || s.isBlank()) return false;
-        if (s.indexOf('$') >= 0) return false; // no inner class dollar signs allowed
-        var parts = s.split("\\.");
-        if (parts.length == 0) return false;
-        for (var p : parts) {
-            if (p.isEmpty()) return false;
-            if (!Character.isJavaIdentifierStart(p.charAt(0))) return false;
-            for (int i = 1; i < p.length(); i++) {
-                if (!Character.isJavaIdentifierPart(p.charAt(i))) return false;
+        if (s == null || s.isBlank() || s.indexOf('$') >= 0) return false;
+        for (var part : s.split("\\.", -1)) {
+            if (part.isEmpty() || !Character.isJavaIdentifierStart(part.charAt(0))) return false;
+            for (int i = 1; i < part.length(); i++) {
+                if (!Character.isJavaIdentifierPart(part.charAt(i))) return false;
             }
         }
         return true;

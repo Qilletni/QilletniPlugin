@@ -1,52 +1,38 @@
 package dev.qilletni.intellij.actions;
 
-import com.intellij.openapi.actionSystem.*;
-import com.intellij.openapi.editor.Editor;
-import com.intellij.openapi.project.DumbAware;
-import com.intellij.psi.PsiDocumentManager;
-import dev.qilletni.intellij.spotify.QilletniSpotifyService.MusicTypeContext;
-import dev.qilletni.intellij.ui.SelectSpotifyDialog;
+import com.intellij.openapi.actionSystem.ActionUpdateThread;
+import com.intellij.openapi.actionSystem.AnActionEvent;
+import com.intellij.openapi.actionSystem.CommonDataKeys;
+import com.intellij.openapi.project.DumbAwareAction;
+import dev.qilletni.intellij.QilletniFile;
+import dev.qilletni.intellij.ui.QilletniMusicPicker;
 import dev.qilletni.intellij.util.QilletniMusicPsiUtil;
+import org.jetbrains.annotations.NotNull;
 
-public class QilletniSelectSpotifyAction extends AnAction implements DumbAware {
-    public QilletniSelectSpotifyAction() { super("Qilletni: Select Spotify music"); }
-
+/**
+ * Choose Spotify Music: replaces the music literal at the caret, or inserts one at the caret.
+ */
+public final class QilletniSelectSpotifyAction extends DumbAwareAction {
     @Override
-    public void update(AnActionEvent e) {
-        var project = e.getProject();
-        boolean enabled = false;
-        if (project != null) {
-            Editor editor = e.getData(CommonDataKeys.EDITOR);
-            if (editor != null) {
-                var file = PsiDocumentManager.getInstance(project).getPsiFile(editor.getDocument());
-                if (file != null) {
-                    var element = file.findElementAt(editor.getCaretModel().getOffset());
-                    enabled = element != null && QilletniMusicPsiUtil.detectContext(element).isPresent();
-                }
-            }
-        }
-        e.getPresentation().setEnabledAndVisible(enabled);
+    public void update(@NotNull AnActionEvent e) {
+        var editor = e.getData(CommonDataKeys.EDITOR);
+        var file = e.getData(CommonDataKeys.PSI_FILE);
+        e.getPresentation().setEnabledAndVisible(e.getProject() != null && editor != null && file instanceof QilletniFile);
     }
 
     @Override
-    public void actionPerformed(AnActionEvent e) {
+    public void actionPerformed(@NotNull AnActionEvent e) {
         var project = e.getProject();
-        if (project == null) return;
         var editor = e.getData(CommonDataKeys.EDITOR);
-        if (editor == null) return;
-        var file = PsiDocumentManager.getInstance(project).getPsiFile(editor.getDocument());
-        if (file == null) return;
+        var file = e.getData(CommonDataKeys.PSI_FILE);
+        if (project == null || editor == null || !(file instanceof QilletniFile)) return;
         var element = file.findElementAt(editor.getCaretModel().getOffset());
-        if (element == null) return;
-        var ctxOpt = QilletniMusicPsiUtil.detectContext(element);
-        if (ctxOpt.isEmpty()) return;
-        var ctx = ctxOpt.get();
-        var dialog = new SelectSpotifyDialog(project, ctx.type());
-        if (dialog.showAndGet()) {
-            dialog.getSelection().ifPresent(choice ->
-                    dev.qilletni.intellij.util.QilletniMusicPsiUtil.applySelection(project, editor, ctx, choice,
-                            ctx.type() == MusicTypeContext.SONG && dialog.includeKeyword())
-            );
-        }
+        var context = element != null ? QilletniMusicPsiUtil.detectContext(element).orElse(null) : null;
+        QilletniMusicPicker.pick(project, editor, context);
+    }
+
+    @Override
+    public @NotNull ActionUpdateThread getActionUpdateThread() {
+        return ActionUpdateThread.BGT;
     }
 }

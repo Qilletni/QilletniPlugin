@@ -1,10 +1,13 @@
 package dev.qilletni.intellij.library;
 
+import com.intellij.navigation.ItemPresentation;
+import dev.qilletni.intellij.QilletniIcons;
 import com.intellij.openapi.roots.SyntheticLibrary;
 import com.intellij.openapi.vfs.VirtualFile;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import javax.swing.Icon;
 import java.util.Collection;
 import java.util.List;
 import java.util.Objects;
@@ -13,7 +16,7 @@ import java.util.Objects;
  * Synthetic library representing binary/class roots (e.g., native.jar) for a Qilletni library.
  * Exposes the jar via getBinaryRoots() so Java indices/class resolution can see classes.
  */
-public final class QilletniBinarySyntheticLibrary extends SyntheticLibrary {
+public final class QilletniBinarySyntheticLibrary extends SyntheticLibrary implements ItemPresentation {
     private final String name;
     private final String presentableName;
     private final List<VirtualFile> binaryRoots;
@@ -40,14 +43,15 @@ public final class QilletniBinarySyntheticLibrary extends SyntheticLibrary {
         return sourceRoots;
     }
 
-    // Newer platform versions use this method to label the node in External Libraries
-    public @Nullable String getPresentableName() {
+    /** Label of the node in External Libraries. */
+    @Override
+    public @Nullable String getPresentableText() {
         return presentableName;
     }
 
-    // Keep for compatibility with our own usages in code paths that may call this helper
-    public @Nullable String getPresentableNameOrNull() {
-        return presentableName;
+    @Override
+    public @Nullable Icon getIcon(boolean unused) {
+        return QilletniIcons.FILE;
     }
 
     @Override

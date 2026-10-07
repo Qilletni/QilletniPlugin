@@ -23,7 +23,7 @@ public final class QilletniTypeUtil {
             var entityInit = PsiTreeUtil.findChildOfType(primary, QilletniEntityInitialize.class);
             if (entityInit != null) {
                 // entity_initialize ::= NEW ID LEFT_PAREN ...
-                var id = PsiTreeUtil.findChildOfType(entityInit, com.intellij.psi.PsiElement.class, false, QilletniExpr.class);
+                var id = PsiTreeUtil.findChildOfType(entityInit, PsiElement.class, false, QilletniExpr.class);
                 if (id != null && id.getNode() != null && id.getNode().getElementType() == QilletniTypes.ID) {
                     return id.getText();
                 }

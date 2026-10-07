@@ -12,7 +12,7 @@ import com.intellij.psi.PsiManager;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.search.GlobalSearchScope;
 import com.intellij.psi.search.GlobalSearchScopesCore;
-import dev.qilletni.intellij.library.QilletniLibraryManager;
+import dev.qilletni.intellij.library.QilletniProjectDependencies;
 import dev.qilletni.intellij.library.QilletniYamlInfoUtil;
 import dev.qilletni.intellij.library.model.InstalledQllLibrary;
 import dev.qilletni.intellij.QilletniFile;
@@ -48,12 +48,15 @@ public final class QilletniNativeBindingResolver {
 
         // Determine the method name early; if absent, nothing to resolve.
         var fnNameElt = def.getFunctionName();
-        var methodName = fnNameElt == null ? null : fnNameElt.getId().getText();
+        var fnId = fnNameElt == null ? null : fnNameElt.getId();
+        var methodName = fnId == null ? null : fnId.getText();
         if (methodName == null || methodName.isBlank()) return List.of();
 
-        // First: if this file belongs to a project-local qilletni-src, resolve strictly against project sources
+        // Files from an installed package resolve against its native.jar; check this first because the extracted
+        // package also has a qilletni-src directory.
+        var lib = findOwningLibraryFor(qFile);
         var vFile = qFile.getVirtualFile();
-        VirtualFile qilletniSrcRoot = QilletniYamlInfoUtil.findQilletniSrcRoot(vFile);
+        VirtualFile qilletniSrcRoot = lib == null ? QilletniYamlInfoUtil.findQilletniSrcRoot(vFile) : null;
         if (qilletniSrcRoot != null) {
             var classFqns = QilletniYamlInfoUtil.readNativeClassesFromYaml(project, qilletniSrcRoot);
             if (classFqns.isEmpty()) return List.of();
@@ -62,19 +65,13 @@ public final class QilletniNativeBindingResolver {
             List<PsiMethod> out = new ArrayList<>();
             for (var fqn : classFqns) {
                 if (fqn == null || fqn.isBlank()) continue;
-                PsiClass cls = jpf.findClass(fqn, scope);
-                if (cls == null) continue; // strictly sources; do not fall back to jar/class files
-                for (var m : cls.getMethods()) {
-                    if (!m.isConstructor() && methodName.equals(m.getName())) {
-                        out.add(m);
-                    }
-                }
+                // Strictly sources; do not fall back to jar/class files
+                addMethodsNamed(jpf.findClass(fqn, scope), methodName, out);
             }
             return Collections.unmodifiableList(out);
         }
 
-        // Otherwise: treat as external library content; resolve against native.jar as before
-        var lib = findOwningLibraryFor(qFile);
+        // Otherwise: installed package content; resolve against its native.jar
         if (lib == null) return List.of();
         var jarRoot = lib.nativeJarRoot();
         if (jarRoot == null || !jarRoot.isValid()) {
@@ -111,17 +108,16 @@ public final class QilletniNativeBindingResolver {
                 }
             }
 
-            if (cls == null) {
-                continue;
-            }
-
-            for (var m : cls.getMethods()) {
-                if (!m.isConstructor() && methodName.equals(m.getName())) {
-                    out.add(m);
-                }
-            }
+            addMethodsNamed(cls, methodName, out);
         }
         return Collections.unmodifiableList(out);
+    }
+
+    private static void addMethodsNamed(@Nullable PsiClass cls, String methodName, List<PsiMethod> out) {
+        if (cls == null) return;
+        for (var m : cls.getMethods()) {
+            if (!m.isConstructor() && methodName.equals(m.getName())) out.add(m);
+        }
     }
 
     private static @NotNull GlobalSearchScope directoryScopeFor(@NotNull Project project, @NotNull VirtualFile root) {
@@ -133,7 +129,7 @@ public final class QilletniNativeBindingResolver {
     private static @Nullable InstalledQllLibrary findOwningLibraryFor(@NotNull QilletniFile file) {
         var vFile = file.getVirtualFile();
         if (vFile == null) return null;
-        for (var lib : QilletniLibraryManager.getInstance().getInstalled()) {
+        for (var lib : QilletniProjectDependencies.getInstance(file.getProject()).getState().allLibraries()) {
             var src = lib.srcRoot();
             if (src != null && src.isValid() && VfsUtilCore.isAncestor(src, vFile, false)) {
                 return lib;

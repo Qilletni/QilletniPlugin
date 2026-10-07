@@ -2,19 +2,26 @@ package dev.qilletni.intellij.resolve.impl;
 
 import com.intellij.openapi.project.DumbService;
 import com.intellij.openapi.project.Project;
-import com.intellij.openapi.roots.ModuleRootManager;
-import com.intellij.openapi.module.ModuleManager;
+import com.intellij.openapi.roots.ProjectRootManager;
 import com.intellij.openapi.vfs.VfsUtilCore;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.psi.PsiManager;
 import com.intellij.psi.PsiMethod;
+import com.intellij.psi.util.CachedValueProvider;
+import com.intellij.psi.util.CachedValuesManager;
+import com.intellij.psi.util.PsiModificationTracker;
 import com.intellij.psi.util.PsiTreeUtil;
 import dev.qilletni.intellij.QilletniFile;
+import dev.qilletni.intellij.library.QilletniProjectDependencies;
 import dev.qilletni.intellij.library.QilletniYamlInfoUtil;
 import dev.qilletni.intellij.psi.QilletniFunctionDef;
 import org.jetbrains.annotations.NotNull;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * Reverse resolver: given a Java PsiMethod, find Qilletni native function definitions in the current project
@@ -26,6 +33,9 @@ import java.util.*;
 public final class QilletniReverseNativeResolver {
     private QilletniReverseNativeResolver() {}
 
+    /** The native functions declared under one project qilletni-src root, and the classes its manifest binds. */
+    private record SrcRootNatives(Set<String> nativeClasses, Map<String, List<QilletniFunctionDef>> nativesByName) {}
+
     public static @NotNull List<QilletniFunctionDef> resolveQilletniFunctions(@NotNull PsiMethod method) {
         var project = method.getProject();
         if (DumbService.isDumb(project)) return List.of();
@@ -36,51 +46,46 @@ public final class QilletniReverseNativeResolver {
         var name = method.getName();
 
         List<QilletniFunctionDef> results = new ArrayList<>();
-        for (var srcRoot : findProjectQilletniSrcRoots(project)) {
-            var natives = QilletniYamlInfoUtil.readNativeClassesFromYaml(project, srcRoot);
-            if (!natives.contains(fqn)) continue;
-            // Search all .ql files under this root
-            collectMatchingFunctionsUnderRoot(project, srcRoot, name, results);
+        for (var root : getProjectNatives(project)) {
+            if (!root.nativeClasses().contains(fqn)) continue;
+            for (var def : root.nativesByName().getOrDefault(name, List.of())) {
+                if (def.isValid()) results.add(def);
+            }
         }
         return List.copyOf(results);
     }
 
-    private static void collectMatchingFunctionsUnderRoot(Project project, VirtualFile root, String name, List<QilletniFunctionDef> out) {
+    /** Computed once per project state, since Java line markers ask for every method of every open file. */
+    private static List<SrcRootNatives> getProjectNatives(Project project) {
+        return CachedValuesManager.getManager(project).getCachedValue(project, () -> {
+            List<SrcRootNatives> roots = new ArrayList<>();
+            for (var srcRoot : QilletniYamlInfoUtil.findProjectQilletniSrcRoots(project)) {
+                var natives = QilletniYamlInfoUtil.readNativeClassesFromYaml(project, srcRoot);
+                if (natives.isEmpty()) continue;
+                roots.add(new SrcRootNatives(Set.copyOf(natives), collectNativeFunctions(project, srcRoot)));
+            }
+            return CachedValueProvider.Result.create(List.copyOf(roots),
+                    PsiModificationTracker.MODIFICATION_COUNT,
+                    ProjectRootManager.getInstance(project),
+                    QilletniProjectDependencies.getInstance(project).getModificationTracker());
+        });
+    }
+
+    private static Map<String, List<QilletniFunctionDef>> collectNativeFunctions(Project project, VirtualFile root) {
         var psiManager = PsiManager.getInstance(project);
+        Map<String, List<QilletniFunctionDef>> byName = new HashMap<>();
         VfsUtilCore.iterateChildrenRecursively(root, f -> true, fileOrDir -> {
-            if (!fileOrDir.isDirectory() && fileOrDir.getName().endsWith(".ql")) {
-                var psi = psiManager.findFile(fileOrDir);
-                if (psi instanceof QilletniFile) {
-                    var defs = PsiTreeUtil.findChildrenOfType(psi, QilletniFunctionDef.class);
-                    for (var def : defs) {
-                        if (def.getNative() == null) continue;
-                        var fnName = def.getFunctionName();
-                        var id = fnName == null ? null : fnName.getId();
-                        var text = id == null ? null : id.getText();
-                        if (name.equals(text)) {
-                            out.add(def);
-                        }
-                    }
+            if (!fileOrDir.isDirectory() && fileOrDir.getName().endsWith(".ql")
+                    && psiManager.findFile(fileOrDir) instanceof QilletniFile psi) {
+                for (var def : PsiTreeUtil.findChildrenOfType(psi, QilletniFunctionDef.class)) {
+                    if (def.getNative() == null) continue;
+                    var fnName = def.getFunctionName();
+                    var id = fnName != null ? fnName.getId() : null;
+                    if (id != null) byName.computeIfAbsent(id.getText(), k -> new ArrayList<>()).add(def);
                 }
             }
             return true;
         });
-    }
-
-    private static @NotNull List<VirtualFile> findProjectQilletniSrcRoots(@NotNull Project project) {
-        List<VirtualFile> roots = new ArrayList<>();
-        for (var module : ModuleManager.getInstance(project).getModules()) {
-            var contentRoots = ModuleRootManager.getInstance(module).getContentRoots();
-            for (var root : contentRoots) {
-                var candidate = root.findChild("qilletni-src");
-                if (candidate != null && candidate.isValid()) {
-                    var yaml = candidate.findChild("qilletni_info.yml");
-                    if (yaml != null && yaml.isValid()) {
-                        roots.add(candidate);
-                    }
-                }
-            }
-        }
-        return roots;
+        return byName;
     }
 }

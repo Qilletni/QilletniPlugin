@@ -6,15 +6,15 @@ on:
       - 'v*.*.*'
 
 jobs:
-  publish-snapshot:
-    runs-on: ubuntu-latest'
+  publish-release:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
 
       - name: Set up JDK
         uses: actions/setup-java@v5
         with:
-          java-version: '22'
+          java-version: '21'
           distribution: 'temurin'
 
       - uses: gradle/actions/setup-gradle@v5
@@ -41,8 +41,8 @@ jobs:
 
           echo "Confirmed release version: $VERSION"
 
-      - name: Publish Release
-        run: ./gradlew :buildPlugin
+      - name: Build and verify plugin
+        run: ./gradlew test buildPlugin verifyPlugin
 
       - name: Extract release notes
         uses: ffurrer2/extract-release-notes@v2

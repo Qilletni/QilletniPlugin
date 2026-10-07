@@ -164,7 +164,6 @@ public class QilletniEnterHandler implements EnterHandlerDelegate {
      * Finds the indentation level of the actual WEIGHTS_KEYWORD token (not the pipe).
      */
     private int findWeightsKeywordIndentation(@NotNull PsiFile file, @NotNull Editor editor, int offset) {
-        System.out.println("QilletniEnterHandler.findWeightsKeywordIndentation");
         PsiDocumentManager.getInstance(file.getProject()).commitDocument(editor.getDocument());
 
         // Find the PSI element at the current position
@@ -175,7 +174,6 @@ public class QilletniEnterHandler implements EnterHandlerDelegate {
 
         // Look for variable declaration containing weights keyword (weights myWeights = ...)
         QilletniVarDeclaration varDecl = PsiTreeUtil.getParentOfType(element, QilletniVarDeclaration.class);
-        System.out.println("varDecl = " + varDecl);
         if (varDecl != null) {
             PsiElement weightsKeyword = findWeightsKeywordToken(varDecl);
             if (weightsKeyword != null) {
@@ -185,15 +183,12 @@ public class QilletniEnterHandler implements EnterHandlerDelegate {
 
         // Also check for assignment (myWeights = weights_expr)
         QilletniAsmt assignment = PsiTreeUtil.getParentOfType(element, QilletniAsmt.class);
-        System.out.println("assignment = " + assignment);
         if (assignment != null) {
             PsiElement weightsKeyword = findWeightsKeywordToken(assignment);
             if (weightsKeyword != null) {
                 return calculateTokenIndentation(weightsKeyword, document);
             }
         }
-
-        System.out.println("Falback");
 
         return 0; // fallback to column 0 if weights keyword not found
     }
@@ -222,25 +217,6 @@ public class QilletniEnterHandler implements EnterHandlerDelegate {
         // Update caret parameters to position cursor correctly
         caretOffset.set(newCaretPos);
         caretAdvance.set(0); // No additional advance needed
-
-        // Clear the insertion state
-        editor.putUserData(LAST_PIPE_INSERTION_KEY, null);
-    }
-
-    /**
-     * Removes the just-inserted pipe and space from the current line.
-     *
-     * @deprecated Use handleDoubleEnter instead for proper caret management
-     */
-    private void removeJustInsertedPipe(@NotNull Editor editor, @NotNull Document document, int offset) {
-        PipeInsertionState state = editor.getUserData(LAST_PIPE_INSERTION_KEY);
-        if (state == null) return;
-
-        int lineStart = document.getLineStartOffset(document.getLineNumber(offset));
-        int pipeStart = lineStart + state.indentLevel;
-
-        // Remove the "| " at the expected position
-        document.deleteString(pipeStart, pipeStart + 2);
 
         // Clear the insertion state
         editor.putUserData(LAST_PIPE_INSERTION_KEY, null);

@@ -1,127 +1,102 @@
 package dev.qilletni.intellij.toolchain;
 
-import com.intellij.execution.configurations.GeneralCommandLine;
-import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.execution.ExecutionException;
+import com.intellij.execution.process.CapturingProcessHandler;
+import com.intellij.openapi.components.Service;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
-import com.intellij.openapi.util.NlsSafe;
-import com.intellij.openapi.util.SystemInfo;
-import com.intellij.openapi.vfs.LocalFileSystem;
-import com.intellij.openapi.vfs.VfsUtil;
-import com.intellij.openapi.vfs.VirtualFile;
-import com.intellij.psi.util.CachedValue;
-import com.intellij.psi.util.CachedValueProvider;
-import com.intellij.psi.util.CachedValuesManager;
+import com.intellij.util.concurrency.AppExecutorUtil;
+import dev.qilletni.intellij.QilletniBundle;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-import java.io.File;
-import java.nio.charset.StandardCharsets;
+import java.io.IOException;
+import java.nio.file.Files;
 import java.util.List;
 import java.util.Objects;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.CompletableFuture;
 
 /**
- * Resolves and validates the Qilletni CLI/toolchain executable for a project.
- * Detection order: project override > application default > PATH probing.
+ * Checks that the configured toolchain actually starts, by running {@code --version} through
+ * {@link QilletniToolchainLauncher}. The check runs in the background and is cached until the JAR or JDK changes.
+ * <p>
+ * Run configurations don't wait for this; they only use {@link QilletniToolchainLauncher#findProblem}, which is instant.
  */
+@Service(Service.Level.PROJECT)
 public final class QilletniToolchainService {
     private static final Logger LOG = Logger.getInstance(QilletniToolchainService.class);
 
+    /** @param version the toolchain's version output when {@code ok}; @param problem why it failed otherwise */
+    public record Status(boolean ok, @Nullable String version, @Nullable String problem) {}
+
     private final Project project;
-    private final CachedValue<ValidationResult> versionInfo;
+    private volatile @Nullable String cachedKey;
+    private volatile @Nullable Status cachedStatus;
 
     public QilletniToolchainService(@NotNull Project project) {
         this.project = project;
-        this.versionInfo = CachedValuesManager.getManager(project).createCachedValue(() -> {
-            var appTracker = QilletniToolchainSettings.getInstance().getModificationTracker();
-            var projectTracker = QilletniToolchainSettingsProject.getInstance(project).getModificationTracker();
-            return CachedValueProvider.Result.create(fetchValidation(), appTracker, projectTracker);
-        }, false);
     }
 
     public static QilletniToolchainService getInstance(@NotNull Project project) {
         return project.getService(QilletniToolchainService.class);
     }
 
-    public @Nullable File getExecutable() {
-        var settings = QilletniToolchainSettings.getInstance();
-        var projectPath = QilletniToolchainSettingsProject.getInstance(project).getState().toolchainPath;
-        var candidate = firstNonBlank(projectPath, settings.getState().toolchainPath);
-        if (candidate != null) {
-            var f = new File(candidate);
-            if (f.isFile() && f.canExecute()) return f;
-            var bin = new File(candidate, binName());
-            if (bin.isFile() && bin.canExecute()) return bin;
-        }
-
-        for (var name : executableNames()) {
-            var onPath = findOnPath(name);
-            if (onPath != null) return onPath;
-        }
-        return null;
+    /** The last completed check, if it still matches the current settings. */
+    public @Nullable Status getCachedStatus() {
+        return Objects.equals(cachedKey, currentKey()) ? cachedStatus : null;
     }
 
-    public @NotNull ValidationResult validate() {
-        var v = versionInfo.getValue();
-        return v != null ? v : new ValidationResult(false, null, "Qilletni executable not found");
+    /** Checks the toolchain in the background, reusing the cached result when nothing changed. */
+    public @NotNull CompletableFuture<Status> checkAsync() {
+        var cached = getCachedStatus();
+        if (cached != null) return CompletableFuture.completedFuture(cached);
+        return CompletableFuture.supplyAsync(() -> {
+            var key = currentKey();
+            var status = check();
+            cachedKey = key;
+            cachedStatus = status;
+            return status;
+        }, AppExecutorUtil.getAppExecutorService());
     }
 
-    public @Nullable @NlsSafe String getVersion() {
-        var v = validate();
-        return v.ok ? v.version : null;
-    }
-
-    private ValidationResult fetchValidation() {
+    private Status check() {
+        var problem = QilletniToolchainLauncher.findProblem(project);
+        if (problem != null) return new Status(false, null, problem);
         try {
-            var exe = getExecutable();
-            if (exe == null) return new ValidationResult(false, null, "Executable not found");
-            var cmd = new GeneralCommandLine(exe.getAbsolutePath());
-            cmd.addParameter("--version");
-            cmd.withCharset(StandardCharsets.UTF_8);
-            var process = cmd.createProcess();
-            if (!process.waitFor(5, TimeUnit.SECONDS)) {
-                process.destroyForcibly();
-                return new ValidationResult(false, null, "Version query timed out");
+            var cmd = QilletniToolchainLauncher.toolchainCommandLine(project, List.of("--version"));
+            var output = new CapturingProcessHandler(cmd).runProcess(15_000);
+            if (output.isTimeout()) return new Status(false, null, QilletniBundle.message("toolchain.problem.timeout"));
+            var text = output.getStdout().trim();
+            if (output.getExitCode() != 0 || text.isEmpty()) {
+                var error = output.getStderr().trim();
+                return new Status(false, null, error.isEmpty() ? QilletniBundle.message("toolchain.problem.exitCode", output.getExitCode()) : firstLine(error));
             }
-            var out = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
-            if (out.isEmpty()) out = new String(process.getErrorStream().readAllBytes(), StandardCharsets.UTF_8).trim();
-            if (out.isEmpty()) return new ValidationResult(false, null, "No version output");
-            return new ValidationResult(true, out, null);
-        } catch (Exception e) {
-            LOG.warn("Failed to validate Qilletni toolchain", e);
-            return new ValidationResult(false, null, e.getMessage());
+            // The first line reads "qilletni <version>"; the rest lists component versions
+            var version = firstLine(text);
+            if (version.startsWith("qilletni ")) version = version.substring("qilletni ".length()).trim();
+            return new Status(true, version, null);
+        } catch (ExecutionException e) {
+            LOG.info("Qilletni toolchain check failed", e);
+            return new Status(false, null, e.getMessage());
         }
     }
 
-    private static String binName() {
-        // Use this when using actually installed alias (if ever?)
-//        return SystemInfo.isWindows ? "qilletni.bat" : "qilletni";
-        return "QilletniToolchain.jar";
-    }
-
-    private static List<String> executableNames() {
-        // Use this when using actually installed alias (if ever?)
-//        return SystemInfo.isWindows ? List.of("qilletni.exe", "qilletni.cmd", "qilletni.bat") : List.of("qilletni");
-        return List.of("QilletniToolchain.jar");
-    }
-
-    private static @Nullable File findOnPath(String name) {
-        var path = System.getenv("PATH");
-        if (path == null || path.isBlank()) return null;
-        var sep = SystemInfo.isWindows ? ";" : ":";
-        for (var dir : path.split(sep)) {
-            var f = new File(dir, name);
-            if (f.isFile() && f.canExecute()) return f;
+    /** Identifies the inputs of a check: JAR path and modification time, and JDK home. */
+    private @Nullable String currentKey() {
+        var jar = QilletniInstallation.toolchainJar();
+        var jdk = QilletniInstallation.jdk(project);
+        if (jar == null || jdk == null) return null;
+        long modified;
+        try {
+            modified = Files.getLastModifiedTime(jar).toMillis();
+        } catch (IOException e) {
+            modified = -1;
         }
-        return null;
+        return jar + "|" + modified + "|" + jdk.getHomePath();
     }
 
-    private static @Nullable String firstNonBlank(String a, String b) {
-        if (a != null && !a.isBlank()) return a;
-        if (b != null && !b.isBlank()) return b;
-        return null;
+    private static String firstLine(String text) {
+        int newline = text.indexOf('\n');
+        return newline >= 0 ? text.substring(0, newline).trim() : text;
     }
-
-    public record ValidationResult(boolean ok, @Nullable String version, @Nullable String message) { }
 }
