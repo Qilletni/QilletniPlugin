@@ -11,6 +11,7 @@ import com.intellij.openapi.application.PathManager;
 import com.intellij.openapi.components.Service;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.util.io.NioFiles;
+import com.intellij.openapi.vfs.JarFileSystem;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.openapi.vfs.VirtualFileManager;
@@ -31,11 +32,15 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.jar.JarOutputStream;
+import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 /**
- * Application-level cache of .qll archives. Loading an archive reads its {@code qll.info} and extracts
- * {@code qilletni-src/**} and {@code native.jar} into the IDE system directory so they can be used as library roots.
+ * Application-level cache of .qll archives. Loading an archive reads its {@code qll.info}, extracts
+ * {@code qilletni-src/**} into the IDE system directory and puts the native classes in a {@code native.jar} next to it,
+ * so both can be used as library roots. Current archives store the classes under {@code native/}; older ones contain
+ * a {@code native.jar}.
  * <p>
  * Which archives a project uses is decided by {@link QilletniProjectDependencies}; this class only loads them.
  */
@@ -43,6 +48,10 @@ import java.util.zip.ZipFile;
 public final class QilletniLibraryManager {
     private static final Logger LOG = Logger.getInstance(QilletniLibraryManager.class);
     private static final String SRC_PREFIX = "qilletni-src/";
+    private static final String NATIVE_PREFIX = "native/";
+    private static final String NATIVE_JAR = "native.jar";
+    /** Bump when the extraction layout changes, so caches written by older versions are extracted again. */
+    private static final int CACHE_FORMAT = 2;
 
     /** Result of loading an archive: either a library or an error message. */
     public record LoadResult(@Nullable InstalledQllLibrary library, @Nullable String error) {
@@ -117,8 +126,8 @@ public final class QilletniLibraryManager {
             if (info == null) return LoadResult.error("Missing qll.info in " + archive.getFileName());
             if (info.name() == null || info.name().isBlank()) return LoadResult.error("qll.info in " + archive.getFileName() + " has no name");
 
-            var cacheDir = cacheRoot().resolve(sha256(archive.toString()));
-            var stamp = key.modified() + ":" + key.size();
+            var cacheDir = cacheDirFor(archive);
+            var stamp = CACHE_FORMAT + ":" + key.modified() + ":" + key.size();
             var stampFile = cacheDir.resolve(".qll.meta");
             boolean upToDate = Files.isRegularFile(stampFile) && Files.readString(stampFile).equals(stamp);
             if (!upToDate) {
@@ -131,10 +140,12 @@ public final class QilletniLibraryManager {
             var srcDir = cacheDir.resolve("qilletni-src");
             VirtualFile srcRoot = Files.isDirectory(srcDir) ? LocalFileSystem.getInstance().refreshAndFindFileByNioFile(srcDir) : null;
             VirtualFile nativeJarRoot = null;
-            var nativeJar = cacheDir.resolve("native.jar");
-            if (Files.isRegularFile(nativeJar)) {
-                var url = "jar://" + nativeJar.toAbsolutePath().toString().replace('\\', '/') + "!/";
-                nativeJarRoot = VirtualFileManager.getInstance().refreshAndFindFileByUrl(url);
+            var nativeJar = cacheDir.resolve(NATIVE_JAR);
+            var localJar = Files.isRegularFile(nativeJar) ? LocalFileSystem.getInstance().refreshAndFindFileByNioFile(nativeJar) : null;
+            if (localJar != null) {
+                nativeJarRoot = JarFileSystem.getInstance().getJarRootForLocalFile(localJar);
+                // A re-extracted jar replaces one at the same path; drop what the jar file system remembers of it
+                if (nativeJarRoot != null && !upToDate) nativeJarRoot.refresh(false, true);
             }
 
             return new LoadResult(new InstalledQllLibrary(
@@ -186,14 +197,23 @@ public final class QilletniLibraryManager {
         return e != null && e.isJsonPrimitive() ? e.getAsInt() : 0;
     }
 
-    /** Extracts {@code qilletni-src/**} and {@code native.jar}, refusing entries that would escape {@code target}. */
+    /** Directory the given archive is extracted into. */
+    static @NotNull Path cacheDirFor(@NotNull Path archive) {
+        return cacheRoot().resolve(sha256(archive.toAbsolutePath().normalize().toString()));
+    }
+
+    /**
+     * Extracts {@code qilletni-src/**} and {@code native.jar}, refusing entries that would escape {@code target}.
+     * Archives without a {@code native.jar} get one packed from their {@code native/**} entries.
+     */
     private static void extract(ZipFile zip, Path target) throws IOException {
         var root = target.toAbsolutePath().normalize();
+        if (zip.getEntry(NATIVE_JAR) == null) repackNativeDir(zip, root.resolve(NATIVE_JAR));
         var entries = zip.entries();
         while (entries.hasMoreElements()) {
             var entry = entries.nextElement();
             var name = entry.getName();
-            if (!name.startsWith(SRC_PREFIX) && !name.equals("native.jar")) continue;
+            if (!name.startsWith(SRC_PREFIX) && !name.equals(NATIVE_JAR)) continue;
 
             var out = root.resolve(name).normalize();
             if (!out.startsWith(root)) {
@@ -207,6 +227,26 @@ public final class QilletniLibraryManager {
                 try (var in = zip.getInputStream(entry)) {
                     Files.copy(in, out);
                 }
+            }
+        }
+    }
+
+    /** Writes the archive's {@code native/**} entries, without that prefix, to a jar. Writes nothing if there are none. */
+    private static void repackNativeDir(ZipFile zip, Path out) throws IOException {
+        var nativeEntries = zip.stream()
+                .filter(e -> e.getName().startsWith(NATIVE_PREFIX) && e.getName().length() > NATIVE_PREFIX.length())
+                .toList();
+        if (nativeEntries.isEmpty()) return;
+
+        try (var jar = new JarOutputStream(Files.newOutputStream(out))) {
+            for (var entry : nativeEntries) {
+                jar.putNextEntry(new ZipEntry(entry.getName().substring(NATIVE_PREFIX.length())));
+                if (!entry.isDirectory()) {
+                    try (var in = zip.getInputStream(entry)) {
+                        in.transferTo(jar);
+                    }
+                }
+                jar.closeEntry();
             }
         }
     }

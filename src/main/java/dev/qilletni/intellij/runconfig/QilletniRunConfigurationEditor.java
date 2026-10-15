@@ -3,15 +3,20 @@ package dev.qilletni.intellij.runconfig;
 import com.intellij.openapi.fileChooser.FileChooserDescriptor;
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory;
 import com.intellij.openapi.project.Project;
+import com.intellij.openapi.ui.ComboBox;
 import com.intellij.openapi.ui.TextFieldWithBrowseButton;
+import com.intellij.ui.SimpleListCellRenderer;
 import com.intellij.ui.components.JBCheckBox;
 import com.intellij.util.ui.FormBuilder;
 import dev.qilletni.intellij.QilletniBundle;
+import dev.qilletni.intellij.execution.QilletniLogStream;
 import org.jetbrains.annotations.NotNull;
 
 final class QilletniRunConfigurationEditor extends QilletniRunConfigurationEditorBase<QilletniRunConfiguration> {
     private final TextFieldWithBrowseButton localLibrary = new TextFieldWithBrowseButton();
     private final JBCheckBox useNativeJar = new JBCheckBox(QilletniBundle.message("runconfig.field.useNativeJar"));
+    private final ComboBox<QilletniLogStream.Level> logLevel =
+            new ComboBox<>(new QilletniLogStream.Level[]{QilletniLogStream.Level.INFO, QilletniLogStream.Level.DEBUG});
 
     QilletniRunConfigurationEditor(@NotNull Project project) {
         super(project);
@@ -37,9 +42,14 @@ final class QilletniRunConfigurationEditor extends QilletniRunConfigurationEdito
                 useNativeJar.setEnabled(!localLibrary.getText().isBlank());
             }
         });
+        logLevel.setRenderer(SimpleListCellRenderer.create((label, level, index) -> {
+            if (level != null) label.setText(QilletniBundle.message(level == QilletniLogStream.Level.DEBUG
+                    ? "runconfig.logLevel.debug" : "runconfig.logLevel.info"));
+        }));
         form.addLabeledComponent(QilletniBundle.message("runconfig.field.localLibrary"), localLibrary)
                 .addComponentToRightColumn(useNativeJar)
-                .addTooltip(QilletniBundle.message("runconfig.field.localLibrary.hint"));
+                .addTooltip(QilletniBundle.message("runconfig.field.localLibrary.hint"))
+                .addLabeledComponent(QilletniBundle.message("runconfig.field.logLevel"), logLevel);
     }
 
     @Override
@@ -47,11 +57,13 @@ final class QilletniRunConfigurationEditor extends QilletniRunConfigurationEdito
         localLibrary.setText(s.localLibrary);
         useNativeJar.setSelected(s.useNativeJar);
         useNativeJar.setEnabled(!s.localLibrary.isBlank());
+        logLevel.setSelectedItem(s.logLevel);
     }
 
     @Override
     protected void applyFields(@NotNull QilletniRunConfiguration s) {
         s.localLibrary = localLibrary.getText().trim();
         s.useNativeJar = useNativeJar.isSelected();
+        s.logLevel = logLevel.getItem();
     }
 }

@@ -14,6 +14,7 @@
 - Libraries come from each project's `qilletni.lock` (or `qilletni_info.yml` when there is no lockfile), resolved from `packages-local` then `packages` like `qilletni run`. Multiple installed versions of a package no longer disable it, and only the project's own dependencies are visible.
 - Fixed reading `qll.info` from current packages, which failed for every archive.
 - Fixed `lib:` imports of installed packages, which never resolved.
+- Native classes of packages built by current toolchains (stored under `native/` in the `.qll`) appear again as `native.jar` under External Libraries, and the gutter icon on a library's `native fun` navigates to the decompiled Java method. Decompiled methods in a library's `native.jar` get a gutter icon back to the Qilletni `native fun`.
 - Libraries load when a project opens; no manual rescan is needed.
 - New **Qilletni** tool window with project dependencies and toolchain, Spotify and registry status, replacing "Qilletni Libraries".
 - **Tools | Qilletni** actions: Sync Dependencies (`qpm install`), Update Lockfile, Build Package, Publish Locally, Publish to Registry, Generate Documentation, and logging in to Spotify and the package registry.

@@ -20,8 +20,8 @@ import java.awt.event.MouseEvent;
 import java.util.List;
 
 /**
- * Gutter for Java methods that have Qilletni native counterparts in project sources.
- * - Strictly project sources under qilletni-src
+ * Gutter for Java methods that have Qilletni native counterparts, in project sources or in the decompiled
+ * native.jar of an installed library (see {@link QilletniReverseNativeResolver}).
  * - Name-only matching
  * - Chooser popup when multiple targets
  */

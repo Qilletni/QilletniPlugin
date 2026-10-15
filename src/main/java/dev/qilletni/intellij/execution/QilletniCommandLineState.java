@@ -23,7 +23,7 @@ import java.util.List;
 
 /**
  * Runs {@code qilletni run}. The program's output and the toolchain's log events share the Run console; log events
- * are colored by level.
+ * are colored by level. Only log events at or above the configuration's log level are shown.
  */
 public final class QilletniCommandLineState extends JavaCommandLineState {
     private final QilletniRunConfiguration cfg;
@@ -95,8 +95,13 @@ public final class QilletniCommandLineState extends JavaCommandLineState {
         return handler;
     }
 
+    /** Whether a toolchain log event at {@code level} belongs in the Run console for the chosen {@code threshold}. */
+    static boolean shouldShow(@NotNull QilletniLogStream.Level level, @NotNull QilletniLogStream.Level threshold) {
+        return level.compareTo(threshold) >= 0;
+    }
+
     private void print(QilletniLogStream.LogRecord record) {
-        if (console == null) return;
+        if (console == null || !shouldShow(record.level(), cfg.logLevel)) return;
         var type = switch (record.level()) {
             case ERROR -> ConsoleViewContentType.LOG_ERROR_OUTPUT;
             case WARN -> ConsoleViewContentType.LOG_WARNING_OUTPUT;

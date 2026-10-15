@@ -10,6 +10,7 @@ import com.intellij.openapi.options.SettingsEditor;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.util.JDOMExternalizerUtil;
 import dev.qilletni.intellij.execution.QilletniCommandLineState;
+import dev.qilletni.intellij.execution.QilletniLogStream;
 import org.jdom.Element;
 import org.jetbrains.annotations.NotNull;
 
@@ -19,6 +20,8 @@ public final class QilletniRunConfiguration extends QilletniRunConfigurationBase
     public String localLibrary = "";
     /** Whether the example should use the library's built native.jar. Only applies with {@link #localLibrary}. */
     public boolean useNativeJar = false;
+    /** The lowest toolchain log level shown in the Run console: {@code INFO} or {@code DEBUG}. */
+    public QilletniLogStream.Level logLevel = QilletniLogStream.Level.INFO;
 
     QilletniRunConfiguration(@NotNull Project project, @NotNull ConfigurationFactory factory, String name) {
         super(project, factory, name);
@@ -40,6 +43,7 @@ public final class QilletniRunConfiguration extends QilletniRunConfigurationBase
         super.readExternal(element);
         useNativeJar = Boolean.parseBoolean(JDOMExternalizerUtil.readField(element, "useNativeJar", "false"));
         localLibrary = JDOMExternalizerUtil.readField(element, "localLibrary", "");
+        logLevel = "DEBUG".equals(JDOMExternalizerUtil.readField(element, "logLevel")) ? QilletniLogStream.Level.DEBUG : QilletniLogStream.Level.INFO;
     }
 
     @Override
@@ -47,5 +51,6 @@ public final class QilletniRunConfiguration extends QilletniRunConfigurationBase
         super.writeExternal(element);
         JDOMExternalizerUtil.writeField(element, "useNativeJar", Boolean.toString(useNativeJar));
         JDOMExternalizerUtil.writeField(element, "localLibrary", localLibrary);
+        JDOMExternalizerUtil.writeField(element, "logLevel", logLevel.name());
     }
 }

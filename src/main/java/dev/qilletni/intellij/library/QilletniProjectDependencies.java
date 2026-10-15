@@ -34,6 +34,7 @@ import dev.qilletni.intellij.toolchain.QilletniInstallation;
 import dev.qilletni.intellij.toolwindow.QilletniToolWindowFactory;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+import org.jetbrains.annotations.TestOnly;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -146,6 +147,12 @@ public final class QilletniProjectDependencies implements Disposable {
         if (project.isDisposed()) return;
         refreshAlarm.cancelAllRequests();
         refreshAlarm.addRequest(this::recompute, 300);
+    }
+
+    /** Recomputes on the calling thread, so tests don't have to wait for the alarm. */
+    @TestOnly
+    public void recomputeNow() {
+        recompute();
     }
 
     private static boolean isRelevant(VFileEvent event) {

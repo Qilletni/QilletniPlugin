@@ -5,6 +5,7 @@ import dev.qilletni.intellij.runconfig.QilletniBuildRunConfiguration;
 import dev.qilletni.intellij.runconfig.QilletniBuildRunConfigurationType;
 import dev.qilletni.intellij.runconfig.QilletniRunConfiguration;
 import dev.qilletni.intellij.runconfig.QilletniRunConfigurationType;
+import org.jdom.Element;
 
 import java.util.List;
 
@@ -38,6 +39,33 @@ public class QilletniCommandArgsTest extends BasePlatformTestCase {
         assertEquals("--local-library", args.get(1));
         assertTrue(args.contains("--use-native-jar"));
         assertFalse(args.contains("--lockfile"));
+    }
+
+    public void testRunConsoleLogLevel() {
+        var info = QilletniLogStream.Level.INFO;
+        var debug = QilletniLogStream.Level.DEBUG;
+        assertTrue(QilletniCommandLineState.shouldShow(QilletniLogStream.Level.ERROR, info));
+        assertTrue(QilletniCommandLineState.shouldShow(QilletniLogStream.Level.WARN, info));
+        assertTrue(QilletniCommandLineState.shouldShow(info, info));
+        assertFalse(QilletniCommandLineState.shouldShow(debug, info));
+        assertFalse(QilletniCommandLineState.shouldShow(QilletniLogStream.Level.TRACE, info));
+        assertTrue(QilletniCommandLineState.shouldShow(info, debug));
+        assertTrue(QilletniCommandLineState.shouldShow(debug, debug));
+        assertFalse(QilletniCommandLineState.shouldShow(QilletniLogStream.Level.TRACE, debug));
+    }
+
+    public void testRunLogLevelPersists() {
+        var cfg = runConfiguration();
+        cfg.logLevel = QilletniLogStream.Level.DEBUG;
+        var element = new Element("configuration");
+        cfg.writeExternal(element);
+        var restored = runConfiguration();
+        restored.readExternal(element);
+        assertEquals(QilletniLogStream.Level.DEBUG, restored.logLevel);
+
+        var fresh = runConfiguration();
+        fresh.readExternal(new Element("configuration"));
+        assertEquals(QilletniLogStream.Level.INFO, fresh.logLevel);
     }
 
     public void testBuildFlags() {

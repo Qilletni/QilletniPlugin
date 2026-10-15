@@ -1,11 +1,16 @@
 package dev.qilletni.intellij.library;
 
+import com.intellij.openapi.vfs.LocalFileSystem;
+import com.intellij.openapi.vfs.VfsUtilCore;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.util.List;
 import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -14,14 +19,76 @@ public class QilletniLibraryManagerTest extends BasePlatformTestCase {
 
     private static Path archive(Map<String, String> entries) throws IOException {
         var file = Files.createTempFile("lib", ".qll");
-        try (var zip = new ZipOutputStream(Files.newOutputStream(file))) {
+        Files.write(file, zipBytes(entries));
+        return file;
+    }
+
+    private static byte[] zipBytes(Map<String, ?> entries) throws IOException {
+        var bytes = new ByteArrayOutputStream();
+        try (var zip = new ZipOutputStream(bytes)) {
             for (var entry : entries.entrySet()) {
                 zip.putNextEntry(new ZipEntry(entry.getKey()));
-                zip.write(entry.getValue().getBytes(StandardCharsets.UTF_8));
+                var value = entry.getValue();
+                zip.write(value instanceof byte[] b ? b : value.toString().getBytes(StandardCharsets.UTF_8));
                 zip.closeEntry();
             }
         }
-        return file;
+        return bytes.toByteArray();
+    }
+
+    public void testRepacksNativeDirectoryIntoJar() throws IOException {
+        var file = archive(Map.of(
+                "qll.info", "{\"name\":\"std\",\"version\":\"1.0.0\"}",
+                "native/META-INF/MANIFEST.MF", "Manifest-Version: 1.0\n",
+                "native/a/b/C.class", "not really a class",
+                "qilletni-src/std.ql", "native fun hello()"));
+        var lib = QilletniLibraryManager.getInstance().load(file).library();
+        assertNotNull(lib);
+        var root = lib.nativeJarRoot();
+        assertNotNull(root);
+        assertNotNull(VfsUtilCore.findRelativeFile("a/b/C.class", root));
+        assertNull(root.findChild("native"));
+        assertNotNull(lib.srcRoot().findChild("std.ql"));
+    }
+
+    public void testLoadsLegacyNativeJar() throws IOException {
+        var file = Files.createTempFile("lib", ".qll");
+        Files.write(file, zipBytes(Map.of(
+                "qll.info", "{\"name\":\"old\",\"version\":\"1.0.0\"}",
+                "native.jar", zipBytes(Map.of("a/C.class", "not really a class")))));
+        var lib = QilletniLibraryManager.getInstance().load(file).library();
+        assertNotNull(lib);
+        assertNotNull(lib.nativeJarRoot());
+        assertNotNull(VfsUtilCore.findRelativeFile("a/C.class", lib.nativeJarRoot()));
+    }
+
+    public void testWithoutNativeClassesHasNoJar() throws IOException {
+        var file = archive(Map.of("qll.info", "{\"name\":\"plain\",\"version\":\"1.0.0\"}", "qilletni-src/a.ql", ""));
+        var lib = QilletniLibraryManager.getInstance().load(file).library();
+        assertNotNull(lib);
+        assertNull(lib.nativeJarRoot());
+    }
+
+    public void testReextractsCacheWrittenByOlderFormat() throws IOException {
+        var file = archive(Map.of(
+                "qll.info", "{\"name\":\"std\",\"version\":\"1.0.0\"}",
+                "native/a/C.class", "not really a class"));
+        var manager = QilletniLibraryManager.getInstance();
+        assertNotNull(manager.load(file).library());
+
+        // Simulate a cache written before native/ was supported: old stamp format and no native.jar
+        var cacheDir = QilletniLibraryManager.cacheDirFor(file);
+        var attrs = Files.readAttributes(file, BasicFileAttributes.class);
+        Files.writeString(cacheDir.resolve(".qll.meta"), attrs.lastModifiedTime().toMillis() + ":" + attrs.size());
+        Files.delete(cacheDir.resolve("native.jar"));
+        // Invalidates the loaded jar root, so the next load goes back to the disk cache
+        LocalFileSystem.getInstance().refreshNioFiles(List.of(cacheDir.resolve("native.jar")));
+
+        var lib = manager.load(file).library();
+        assertNotNull(lib);
+        assertTrue(Files.isRegularFile(cacheDir.resolve("native.jar")));
+        assertNotNull(lib.nativeJarRoot());
+        assertNotNull(VfsUtilCore.findRelativeFile("a/C.class", lib.nativeJarRoot()));
     }
 
     public void testLoadsStringVersionAndSources() throws IOException {
