@@ -20,6 +20,9 @@
 - **Tools | Qilletni** actions: Sync Dependencies (`qpm install`), Update Lockfile, Build Package, Publish Locally, Publish to Registry, Generate Documentation, and logging in to Spotify and the package registry.
 - Completion of package names and versions in `qilletni_info.yml` from the package registry, and an inspection for dependencies that aren't installed.
 
+### Debugging
+- Debug Qilletni Run configurations: line breakpoints (with conditions and log expressions), stepping, the call stack, variables, watches and Evaluate Expression. This needs a toolchain with debugger support; older toolchains show an error asking to update Qilletni. The protocol is described in `docs/debugger-protocol.md`.
+
 ### Running and building
 - Toolchain logs from Run configurations appear in the Run console; builds report warnings and errors in the Build tool window and pass or fail by exit code.
 - Fixed "Build Jar" (now "Rebuild native.jar") doing the opposite of what it said, and "Verbose Gradle output" passing an unknown option.

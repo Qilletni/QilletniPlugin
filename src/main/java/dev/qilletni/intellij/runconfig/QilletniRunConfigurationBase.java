@@ -52,7 +52,10 @@ public abstract class QilletniRunConfigurationBase extends RunConfigurationBase<
         }
     }
 
-    /** Debugging attaches to the toolchain's JVM rather than the Qilletni program, so it is refused up front. */
+    /**
+     * Refuses the Debug executor for configurations without Qilletni debugging (builds). Without this the Java
+     * debugger would attach to the toolchain's JVM instead of the Qilletni program.
+     */
     protected static void checkExecutor(@NotNull Executor executor) throws ExecutionException {
         if (DefaultDebugExecutor.EXECUTOR_ID.equals(executor.getId())) {
             throw new ExecutionException(QilletniBundle.message("runconfig.error.debug"));

@@ -30,6 +30,14 @@ public class QilletniCommandArgsTest extends BasePlatformTestCase {
                 "/p/qilletni-src/main.ql", "one", "two words"), args);
     }
 
+    public void testRunWithDebugPort() {
+        var cfg = runConfiguration();
+        cfg.targetPath = "/p/qilletni-src/main.ql";
+        cfg.args = "arg";
+        var args = QilletniCommandLineState.buildArgs(cfg, null, 1234, 5678);
+        assertEquals(List.of("run", "--log-port", "1234", "--debug-port", "5678", "/p/qilletni-src/main.ql", "arg"), args);
+    }
+
     public void testRunWithLocalLibrary() {
         var cfg = runConfiguration();
         cfg.targetPath = "/lib/examples/demo.ql";

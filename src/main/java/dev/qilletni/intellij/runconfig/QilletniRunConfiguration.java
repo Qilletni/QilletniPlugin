@@ -1,6 +1,5 @@
 package dev.qilletni.intellij.runconfig;
 
-import com.intellij.execution.ExecutionException;
 import com.intellij.execution.Executor;
 import com.intellij.execution.configurations.ConfigurationFactory;
 import com.intellij.execution.configurations.RunConfiguration;
@@ -33,8 +32,7 @@ public final class QilletniRunConfiguration extends QilletniRunConfigurationBase
     }
 
     @Override
-    public @NotNull RunProfileState getState(@NotNull Executor executor, @NotNull ExecutionEnvironment environment) throws ExecutionException {
-        checkExecutor(executor);
+    public @NotNull RunProfileState getState(@NotNull Executor executor, @NotNull ExecutionEnvironment environment) {
         return new QilletniCommandLineState(environment, this);
     }
 

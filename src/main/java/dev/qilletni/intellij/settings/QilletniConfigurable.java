@@ -10,7 +10,9 @@ import com.intellij.openapi.projectRoots.JavaSdk;
 import com.intellij.openapi.projectRoots.ProjectJdkTable;
 import com.intellij.openapi.ui.ComboBox;
 import com.intellij.openapi.ui.TextFieldWithBrowseButton;
+import com.intellij.ui.JBIntSpinner;
 import com.intellij.ui.SimpleListCellRenderer;
+import com.intellij.ui.TitledSeparator;
 import com.intellij.ui.components.ActionLink;
 import com.intellij.ui.components.JBLabel;
 import com.intellij.ui.components.JBTextField;
@@ -18,6 +20,7 @@ import com.intellij.util.ui.FormBuilder;
 import com.intellij.util.ui.JBUI;
 import com.intellij.util.ui.UIUtil;
 import dev.qilletni.intellij.QilletniBundle;
+import dev.qilletni.intellij.debugger.QilletniDebuggerSettings;
 import dev.qilletni.intellij.library.QilletniProjectDependencies;
 import dev.qilletni.intellij.toolchain.QilletniInstallation;
 import dev.qilletni.intellij.toolchain.QilletniToolchainService;
@@ -49,6 +52,7 @@ public final class QilletniConfigurable implements Configurable {
     private ComboBox<String> jdkCombo;
     private JBLabel statusLabel;
     private ActionLink installLink;
+    private JBIntSpinner weightSongLimit;
 
     public QilletniConfigurable(@NotNull Project project) {
         this.project = project;
@@ -100,6 +104,8 @@ public final class QilletniConfigurable implements Configurable {
         statusRow.add(javax.swing.Box.createHorizontalStrut(JBUI.scale(12)));
         statusRow.add(installLink);
 
+        weightSongLimit = new JBIntSpinner(QilletniDebuggerSettings.DEFAULT_WEIGHT_SONG_LIMIT, 0, 100_000);
+
         return FormBuilder.createFormBuilder()
                 .addLabeledComponent(QilletniBundle.message("settings.qilletni.home"), homeField)
                 .addTooltip(QilletniBundle.message("settings.qilletni.home.hint"))
@@ -109,6 +115,9 @@ public final class QilletniConfigurable implements Configurable {
                 .addTooltip(QilletniBundle.message("settings.qilletni.jdk.hint", QilletniInstallation.MIN_JDK.getDescription()))
                 .addVerticalGap(JBUI.scale(8))
                 .addLabeledComponent(QilletniBundle.message("settings.qilletni.status"), statusRow)
+                .addComponent(new TitledSeparator(QilletniBundle.message("settings.qilletni.debugger")))
+                .addLabeledComponent(QilletniBundle.message("settings.qilletni.weightSongLimit"), weightSongLimit)
+                .addTooltip(QilletniBundle.message("settings.qilletni.weightSongLimit.hint"))
                 .addComponentFillVertically(new JPanel(), 0)
                 .getPanel();
     }
@@ -148,7 +157,8 @@ public final class QilletniConfigurable implements Configurable {
         var settings = QilletniToolchainSettings.getInstance();
         return !Objects.equals(blankToNull(homeField.getText()), blankToNull(settings.getQilletniHome()))
                 || !Objects.equals(blankToNull(jarField.getText()), blankToNull(settings.getToolchainPath()))
-                || !Objects.equals(blankToNull((String) jdkCombo.getSelectedItem()), blankToNull(settings.getJdkName()));
+                || !Objects.equals(blankToNull((String) jdkCombo.getSelectedItem()), blankToNull(settings.getJdkName()))
+                || weightSongLimit.getNumber() != QilletniDebuggerSettings.getInstance().getWeightSongLimit();
     }
 
     @Override
@@ -158,6 +168,7 @@ public final class QilletniConfigurable implements Configurable {
         settings.setQilletniHome(blankToNull(homeField.getText()));
         settings.setToolchainPath(blankToNull(jarField.getText()));
         settings.setJdkName(blankToNull((String) jdkCombo.getSelectedItem()));
+        QilletniDebuggerSettings.getInstance().setWeightSongLimit(weightSongLimit.getNumber());
         updateJarPlaceholder();
         if (homeChanged) QilletniProjectDependencies.refreshAll();
     }
@@ -168,6 +179,7 @@ public final class QilletniConfigurable implements Configurable {
         homeField.setText(Objects.requireNonNullElse(settings.getQilletniHome(), ""));
         jarField.setText(Objects.requireNonNullElse(settings.getToolchainPath(), ""));
         jdkCombo.setSelectedItem(Objects.requireNonNullElse(settings.getJdkName(), AUTO_JDK));
+        weightSongLimit.setNumber(QilletniDebuggerSettings.getInstance().getWeightSongLimit());
         updateJarPlaceholder();
         refreshStatus();
     }

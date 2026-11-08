@@ -29,11 +29,17 @@ public final class QilletniCommandLineState extends JavaCommandLineState {
     private final QilletniRunConfiguration cfg;
     private QilletniLogStream logStream;
     private ConsoleView console;
+    private @Nullable Integer debugPort;
 
     public QilletniCommandLineState(@NotNull ExecutionEnvironment env, @NotNull QilletniRunConfiguration cfg) {
         super(env);
         this.cfg = cfg;
         addConsoleFilters(new QilletniOutputHyperlinkFilter(env.getProject()));
+    }
+
+    /** Debugs instead of running: the toolchain connects to the IDE's debug adapter client on {@code port}. */
+    public void setDebugPort(int port) {
+        debugPort = port;
     }
 
     @Override
@@ -47,7 +53,7 @@ public final class QilletniCommandLineState extends JavaCommandLineState {
         // Pass the lockfile explicitly so the run doesn't depend on the working directory
         var model = cfg.findQilletniProject();
         var lockfile = model != null ? model.srcRoot().findChild(QilletniLockfile.FILE_NAME) : null;
-        var args = buildArgs(cfg, lockfile != null ? lockfile.getPath() : null, logStream.getPort());
+        var args = buildArgs(cfg, lockfile != null ? lockfile.getPath() : null, logStream.getPort(), debugPort);
 
         var params = QilletniToolchainLauncher.javaParameters(getEnvironment().getProject(), args);
         params.setWorkingDirectory(cfg.effectiveWorkingDir());
@@ -56,8 +62,13 @@ public final class QilletniCommandLineState extends JavaCommandLineState {
         return params;
     }
 
-    /** Arguments for {@code qilletni run}: options first, then the script and its own arguments. */
     static @NotNull List<String> buildArgs(@NotNull QilletniRunConfiguration cfg, @Nullable String lockfilePath, int logPort) {
+        return buildArgs(cfg, lockfilePath, logPort, null);
+    }
+
+    /** Arguments for {@code qilletni run}: options first, then the script and its own arguments. */
+    static @NotNull List<String> buildArgs(@NotNull QilletniRunConfiguration cfg, @Nullable String lockfilePath, int logPort,
+                                           @Nullable Integer debugPort) {
         var args = new ArrayList<String>();
         args.add("run");
         if (!cfg.localLibrary.isBlank()) {
@@ -71,6 +82,10 @@ public final class QilletniCommandLineState extends JavaCommandLineState {
         }
         args.add("--log-port");
         args.add(Integer.toString(logPort));
+        if (debugPort != null) {
+            args.add("--debug-port");
+            args.add(Integer.toString(debugPort));
+        }
         args.add(cfg.targetPath);
         args.addAll(ParametersListUtil.parse(cfg.args));
         return args;

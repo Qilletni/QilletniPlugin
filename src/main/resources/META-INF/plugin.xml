@@ -18,6 +18,7 @@
         <ul>
             <li>Highlighting, completion, navigation, Find Usages, Rename, structure view, folding and documentation</li>
             <li>Run scripts and build packages with the Qilletni toolchain, with logs in the Run and Build tool windows</li>
+            <li>Debug scripts with breakpoints, stepping, variables and Evaluate Expression (requires a toolchain with debugger support)</li>
             <li>Dependencies from <code>qilletni_info.yml</code> and <code>qilletni.lock</code>, with one-click <code>qpm install</code>, publishing and registry completion</li>
             <li>Spotify-assisted music: pick songs, albums and playlists from Spotify while you type</li>
             <li>Navigation between <code>native fun</code> declarations and their Java implementations</li>
@@ -103,6 +104,7 @@
         <lang.importOptimizer language="Qilletni" implementationClass="dev.qilletni.intellij.refactoring.QilletniImportOptimizer"/>
 
         <applicationService serviceImplementation="dev.qilletni.intellij.toolchain.QilletniToolchainSettings"/>
+        <applicationService serviceImplementation="dev.qilletni.intellij.debugger.QilletniDebuggerSettings"/>
         
         <projectConfigurable instance="dev.qilletni.intellij.settings.QilletniConfigurable"
                               id="dev.qilletni.intellij.settings"
@@ -131,6 +133,11 @@
         <runConfigurationProducer implementation="dev.qilletni.intellij.runconfig.QilletniRunConfigurationProducer"/>
         <runConfigurationProducer implementation="dev.qilletni.intellij.runconfig.QilletniBuildRunConfigurationProducer"/>
         <runLineMarkerContributor language="Qilletni" implementationClass="dev.qilletni.intellij.runconfig.QilletniRunLineMarkerContributor"/>
+        <programRunner implementation="dev.qilletni.intellij.debugger.QilletniDebugRunner" order="first"/>
+        <xdebugger.breakpointType implementation="dev.qilletni.intellij.debugger.QilletniLineBreakpointType"/>
+        <xdebugger.breakpointType implementation="dev.qilletni.intellij.debugger.QilletniExceptionBreakpointType"/>
+        <xdebugger.breakpointType implementation="dev.qilletni.intellij.debugger.QilletniSongPlayedBreakpointType"/>
+        <xdebugger.breakpointType implementation="dev.qilletni.intellij.debugger.QilletniWeightSelectedBreakpointType"/>
 
         <postStartupActivity implementation="dev.qilletni.intellij.project.QilletniRootsListenerStartupActivity"/>
         <postStartupActivity implementation="dev.qilletni.intellij.project.QilletniLibrariesStartupActivity"/>
