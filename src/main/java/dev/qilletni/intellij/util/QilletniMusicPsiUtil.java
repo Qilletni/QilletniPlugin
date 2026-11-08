@@ -166,18 +166,13 @@ public final class QilletniMusicPsiUtil {
     public static String buildReplacementText(@NotNull MusicType type, @NotNull MusicChoice choice, boolean includeSongKeyword) {
         String name = escape(choice.name());
         String primaryArtistOrOwner;
-        System.out.println("choice = " + choice);
-        System.out.println("type = " + type);
         if (type == MusicType.COLLECTION) {
             primaryArtistOrOwner = choice.owner() != null ? escape(choice.owner()) : "";
-            System.out.println("111 primaryArtistOrOwner = " + primaryArtistOrOwner);
         } else {
             if (choice.artists() != null && !choice.artists().isEmpty()) {
                 primaryArtistOrOwner = escape(choice.artists().getFirst());
-                System.out.println("222 primaryArtistOrOwner = " + primaryArtistOrOwner);
             } else {
                 primaryArtistOrOwner = "";
-                System.out.println("333 primaryArtistOrOwner = " + primaryArtistOrOwner);
             }
         }
 

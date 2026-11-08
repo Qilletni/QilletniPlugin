@@ -6,33 +6,31 @@ import com.intellij.openapi.roots.ProjectFileIndex;
 import com.intellij.openapi.module.Module;
 import com.intellij.openapi.module.ModuleUtilCore;
 import com.intellij.openapi.roots.ModuleRootManager;
+import com.intellij.openapi.vfs.VfsUtilCore;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.psi.PsiElement;
+import com.intellij.psi.PsiManager;
 import com.intellij.psi.util.PsiTreeUtil;
 import dev.qilletni.intellij.QilletniFile;
+import dev.qilletni.intellij.library.QilletniProjectDependencies;
 import dev.qilletni.intellij.psi.QilletniImportFile;
 import dev.qilletni.intellij.psi.QilletniTypes;
+import dev.qilletni.intellij.resolve.impl.LibraryRootsPathResolver;
+import dev.qilletni.intellij.resolve.impl.SelfLibraryExamplesOnlyResolver;
 
 import java.io.File;
 import java.util.*;
 
+import static dev.qilletni.intellij.util.QilletniConstants.EXAMPLES;
+import static dev.qilletni.intellij.util.QilletniConstants.QILLETNI_SRC;
+
 /**
  * Utilities to collect import information for a Qilletni file and resolve project-local imported files.
  * - Supports imports like: import "directFile.ql" [AS alias]
- * - Library imports like: import "libName:path/in/lib.ql" are recognized but not resolved yet.
+ * - Library imports like: import "libName:path/in/lib.ql", resolved through {@link QilletniLibraryPathResolver}s.
  */
 final class QilletniImportUtil {
     private QilletniImportUtil() {}
-
-    /**
-     * Computes the transitive closure of project-local imports starting from the given file.
-     * Alias-qualified names are re-exported: files imported by imported files contribute to the same visibility.
-     * This traversal is recursive and guarded against cycles. Library imports will also be traversed once
-     * corresponding resolvers resolve them to VirtualFiles.
-     */
-    static List<VirtualFile> getTransitiveProjectLocalImports(QilletniFile contextFile) {
-        return traverseTransitive(contextFile, /*projectLocalOnly*/ true, /*qualifierFilter*/ null);
-    }
 
     /**
      * Computes the transitive closure of all imported files (aliased and unaliased, including libraries if resolved).
@@ -58,11 +56,12 @@ final class QilletniImportUtil {
         List<VirtualFile> directUnaliased = collectUnaliasedImports(startFile);
         Deque<VirtualFile> frontier = new ArrayDeque<>();
         LinkedHashSet<VirtualFile> visited = new LinkedHashSet<>();
+        var psiManager = PsiManager.getInstance(startFile.getProject());
 
         if (qualifierFilter != null) {
             frontier.addAll(directAliased.getOrDefault(qualifierFilter, List.of()));
         } else {
-            for (var v : directUnaliased) frontier.add(v);
+            frontier.addAll(directUnaliased);
             for (var list : directAliased.values()) frontier.addAll(list);
         }
 
@@ -70,9 +69,7 @@ final class QilletniImportUtil {
             var vf = frontier.removeFirst();
             if (vf == null || !visited.add(vf)) continue;
             // Load PSI to read its direct imports
-            var psi = com.intellij.psi.PsiManager.getInstance(startFile.getProject()).findFile(vf);
-            if (!(psi instanceof QilletniFile)) continue;
-            var qf = (QilletniFile) psi;
+            if (!(psiManager.findFile(vf) instanceof QilletniFile qf)) continue;
             // Collect that file's direct imports
             Map<String, List<VirtualFile>> childAliased = collectAliasedImports(qf);
             List<VirtualFile> childUnaliased = collectUnaliasedImports(qf);
@@ -100,33 +97,9 @@ final class QilletniImportUtil {
 
     // Resolver chain for library-style imports (e.g., "libName:path/in/lib.ql").
     private static final List<QilletniLibraryPathResolver> LIB_RESOLVERS = List.of(
-            new dev.qilletni.intellij.resolve.impl.SelfLibraryExamplesOnlyResolver(),
-            new dev.qilletni.intellij.resolve.impl.LibraryRootsPathResolver()
+            new SelfLibraryExamplesOnlyResolver(),
+            new LibraryRootsPathResolver()
     );
-
-    static List<VirtualFile> getFilesForQualifier(QilletniFile contextFile, String qualifier) {
-        // Preserve existing API: return direct alias files (non-transitive). Not used by callers after resolver change.
-        Map<String, List<VirtualFile>> byAlias = collectAliasedImports(contextFile);
-        return new ArrayList<>(byAlias.getOrDefault(qualifier, Collections.emptyList()));
-    }
-
-    static List<VirtualFile> getAllImportedFiles(QilletniFile contextFile) {
-        Set<VirtualFile> set = new LinkedHashSet<>();
-        for (List<VirtualFile> vfs : collectAliasedImports(contextFile).values()) {
-            set.addAll(vfs);
-        }
-        set.addAll(collectUnaliasedImports(contextFile));
-        return new ArrayList<>(set);
-    }
-
-    static List<VirtualFile> getProjectLocalImports(QilletniFile contextFile) {
-        // Constrain project-local imports to files under any 'qilletni-src' source roots of the context module
-        Set<VirtualFile> set = new LinkedHashSet<>();
-        set.addAll(filterToQilletniSrc(contextFile, collectUnaliasedImports(contextFile)));
-        Map<String, List<VirtualFile>> aliased = collectAliasedImports(contextFile);
-        for (List<VirtualFile> vfs : aliased.values()) set.addAll(filterToQilletniSrc(contextFile, vfs));
-        return new ArrayList<>(set);
-    }
 
     // Exposed for alias resolver
     static Map<String, List<VirtualFile>> collectAliasedImports(QilletniFile file) {
@@ -139,7 +112,7 @@ final class QilletniImportUtil {
             String alias = findAlias(imp);
             if (alias == null) continue; // this method only collects aliased imports
 
-            if (isLibraryPath(raw)) {
+            if (QilletniLibraryImportPath.isLibraryImport(raw)) {
                 List<VirtualFile> files = resolveLibraryFiles(project, raw, contextVf);
                 if (!files.isEmpty()) {
                     res.computeIfAbsent(alias, k -> new ArrayList<>()).addAll(files);
@@ -163,19 +136,30 @@ final class QilletniImportUtil {
             if (raw == null) continue;
             String alias = findAlias(imp);
             if (alias != null) continue; // skip aliased; this method collects only unaliased
-            if (isLibraryPath(raw)) {
+            if (QilletniLibraryImportPath.isLibraryImport(raw)) {
                 res.addAll(resolveLibraryFiles(project, raw, contextVf));
             } else {
                 var vf = resolveProjectLocalFile(file, raw);
                 if (vf != null) res.add(vf);
             }
         }
-        // Always-on auto-imports from installed libraries (application scope)
-        try {
-            var auto = dev.qilletni.intellij.library.QilletniLibraryManager.getInstance().getAllAutoImportFiles();
-            if (auto != null && !auto.isEmpty()) res.addAll(auto);
-        } catch (Throwable ignored) {}
+        // Auto-imports of the libraries this file's project depends on
+        res.addAll(collectAutoImports(project, contextVf));
         return res;
+    }
+
+    private static List<VirtualFile> collectAutoImports(Project project, VirtualFile contextVf) {
+        var out = new LinkedHashSet<VirtualFile>();
+        for (var lib : QilletniProjectDependencies.getInstance(project).librariesFor(contextVf)) {
+            var root = lib.srcRoot();
+            if (root == null || !root.isValid()) continue;
+            for (var rel : lib.autoImportFiles()) {
+                if (rel == null || rel.isBlank()) continue;
+                var vf = VfsUtilCore.findRelativeFile(rel.startsWith("/") ? rel.substring(1) : rel, root);
+                if (vf != null) out.add(vf);
+            }
+        }
+        return new ArrayList<>(out);
     }
 
     private static String findStringLiteralText(QilletniImportFile imp) {
@@ -183,12 +167,7 @@ final class QilletniImportUtil {
         for (PsiElement c = imp.getFirstChild(); c != null; c = c.getNextSibling()) {
             if (c.getNode() != null && c.getNode().getElementType() == QilletniTypes.STRING) {
                 String t = c.getText();
-                if (t.length() >= 2 && (t.startsWith("\"") && t.endsWith("\""))) {
-                    String inner = t.substring(1, t.length() - 1);
-                    // Library imports look like "lib:foo/bar.ql" — we recognize but don't resolve them yet
-                    return inner;
-                }
-                return t;
+                return t.length() >= 2 && t.startsWith("\"") && t.endsWith("\"") ? t.substring(1, t.length() - 1) : t;
             }
         }
         return null;
@@ -203,25 +182,13 @@ final class QilletniImportUtil {
         return null;
     }
 
-    private static boolean isLibraryPath(String raw) {
-        int colon = raw.indexOf(':');
-        return colon > 0; // "name:path"
-    }
-
+    /** Asks each resolver in priority order and returns the first non-empty result. */
     private static List<VirtualFile> resolveLibraryFiles(Project project, String raw, VirtualFile contextFile) {
-        System.out.println("QilletniImportUtil.resolveLibraryFiles raw=" + raw);;
         if (project == null || raw == null) return List.of();
         for (var resolver : LIB_RESOLVERS) {
-            System.out.println("resolver = " + resolver);
-            try {
-                if (resolver != null && resolver.supports(raw)) {
-                    List<VirtualFile> files = resolver.resolve(project, raw, contextFile);
-                    System.out.println("files = " + files);
-                    return files != null ? files : List.of();
-                }
-            } catch (Throwable ignored) {
-                // defensive: never let a resolver break import collection
-            }
+            if (!resolver.supports(raw)) continue;
+            List<VirtualFile> files = resolver.resolve(project, raw, contextFile);
+            if (files != null && !files.isEmpty()) return files;
         }
         return List.of();
     }
@@ -230,69 +197,59 @@ final class QilletniImportUtil {
         // Resolve project-local file paths relative to the importing file's directory.
         // Supports ./ and ../ segments naturally via VirtualFile.findFileByRelativePath.
         // Fallback: project base path to maintain backwards compatibility for root-based imports.
-        if (isLibraryPath(importPathLiteral)) return null; // library paths handled elsewhere
-        if (baseFile != null) {
-            var vf = baseFile.getVirtualFile();
-            var baseDir = vf != null ? vf.getParent() : null;
-            if (baseDir != null) {
-                var rel = baseDir.findFileByRelativePath(importPathLiteral);
-                if (rel != null) return rel;
-            }
-            var project = baseFile.getProject();
-            String basePath = project != null ? project.getBasePath() : null;
-            if (basePath != null) {
-                File ioFile = new File(basePath, importPathLiteral);
-                return LocalFileSystem.getInstance().findFileByIoFile(ioFile);
-            }
-            return null;
+        if (QilletniLibraryImportPath.isLibraryImport(importPathLiteral)) return null; // library paths handled elsewhere
+        if (baseFile == null) return null;
+        var vf = baseFile.getVirtualFile();
+        var baseDir = vf != null ? vf.getParent() : null;
+        if (baseDir != null) {
+            var rel = baseDir.findFileByRelativePath(importPathLiteral);
+            if (rel != null) return rel;
         }
-        return null;
+        String basePath = baseFile.getProject().getBasePath();
+        return basePath != null ? LocalFileSystem.getInstance().findFileByIoFile(new File(basePath, importPathLiteral)) : null;
     }
 
     private static List<VirtualFile> filterToQilletniSrc(QilletniFile contextFile, List<VirtualFile> files) {
-        // Context-aware project-local filter per requirements:
-        // - If context is under 'qilletni-src': allow only files under any 'qilletni-src' source root of the same module.
-        // - If context is under 'examples': allow only files under the SAME 'examples' root as the context file (same root URL).
-        // - If context has no source root: allow only files in the same directory as the context file (same parent VirtualFile).
+        // Context-aware project-local filter. Roots are found by directory name, so 'qilletni-src' does not
+        // need to be marked as a Sources Root (build-system re-imports would undo that anyway).
+        // - If context is under 'qilletni-src': allow only files under a 'qilletni-src' dir of the same module's content roots.
+        // - If context is under 'examples': allow only files under the SAME 'examples' dir as the context file.
+        // - Otherwise: allow only files in the same directory as the context file (same parent VirtualFile).
         if (files == null || files.isEmpty()) return List.of();
         var project = contextFile.getProject();
         var fileIndex = ProjectFileIndex.getInstance(project);
         var ctxVf = contextFile.getVirtualFile();
-        var ctxRoot = ctxVf != null ? fileIndex.getSourceRootForFile(ctxVf) : null;
+        var ctxRoot = ctxVf != null ? findQilletniRoot(ctxVf, fileIndex) : null;
         var ctxParent = ctxVf != null ? ctxVf.getParent() : null;
-
-        Module module = null;
-        if (ctxVf != null) {
-            module = ModuleUtilCore.findModuleForFile(ctxVf, project);
-        }
 
         // Build allowed root URLs per context
         Set<String> allowedRootUrls = new HashSet<>();
-        String mode = null; // "qsrc", "examples", or "same-dir"
+        String mode = "same-dir"; // "qsrc", "examples", or "same-dir"
         if (ctxRoot != null) {
-            var rootName = ctxRoot.getName();
-            if ("qilletni-src".equals(rootName)) {
+            if (QILLETNI_SRC.equals(ctxRoot.getName())) {
                 mode = "qsrc";
+                allowedRootUrls.add(ctxRoot.getUrl());
+                Module module = ModuleUtilCore.findModuleForFile(ctxVf, project);
                 if (module != null) {
-                    for (var root : ModuleRootManager.getInstance(module).getSourceRoots(false)) {
-                        if (root != null && "qilletni-src".equals(root.getName())) {
-                            allowedRootUrls.add(root.getUrl());
-                        }
+                    for (var contentRoot : ModuleRootManager.getInstance(module).getContentRoots()) {
+                        var qsrc = contentRoot.findChild(QILLETNI_SRC);
+                        if (qsrc != null && qsrc.isDirectory()) allowedRootUrls.add(qsrc.getUrl());
                     }
                 }
-            } else if ("examples".equals(rootName)) {
+            } else {
                 mode = "examples";
-                // Only the same examples root as the context
                 allowedRootUrls.add(ctxRoot.getUrl());
             }
-        }
-        if (mode == null) {
-            mode = "same-dir";
         }
 
         List<VirtualFile> result = new ArrayList<>();
         for (var vf : files) {
             if (vf == null) continue;
+            // Files outside the project content came from a library import; the source-root rules don't apply
+            if (!fileIndex.isInContent(vf)) {
+                result.add(vf);
+                continue;
+            }
             if ("same-dir".equals(mode)) {
                 if (ctxParent != null && vf.getParent() != null && ctxParent.equals(vf.getParent())) {
                     result.add(vf);
@@ -300,33 +257,26 @@ final class QilletniImportUtil {
                 continue;
             }
 
-            // For mode qsrc/examples, verify the candidate's source root and module isolation
-            var root = fileIndex.getSourceRootForFile(vf);
-            String rootName = root != null ? root.getName() : null;
-            boolean ok = false;
-            if (root != null) {
-                if ("qsrc".equals(mode)) {
-                    ok = "qilletni-src".equals(rootName) && (allowedRootUrls.isEmpty() || allowedRootUrls.contains(root.getUrl()));
-                } else if ("examples".equals(mode)) {
-                    ok = "examples".equals(rootName) && allowedRootUrls.contains(root.getUrl());
-                }
-            } else {
-                // Fallback for cases where source root is null: walk ancestors to infer root name
-                for (var cur = vf.getParent(); cur != null; cur = cur.getParent()) {
-                    var name = cur.getName();
-                    if ("qsrc".equals(mode) && "qilletni-src".equals(name)) {
-                        var url = cur.getUrl();
-                        ok = allowedRootUrls.isEmpty() || allowedRootUrls.contains(url);
-                        break;
-                    } else if ("examples".equals(mode) && "examples".equals(name)) {
-                        var url = cur.getUrl();
-                        ok = allowedRootUrls.contains(url);
-                        break;
-                    }
-                }
+            // For mode qsrc/examples, the candidate must sit under one of the allowed roots
+            var root = findQilletniRoot(vf, fileIndex);
+            if (root != null && root.getName().equals(ctxRoot.getName()) && allowedRootUrls.contains(root.getUrl())) {
+                result.add(vf);
             }
-            if (ok) result.add(vf);
         }
         return result;
+    }
+
+    /**
+     * Returns the nearest ancestor directory named 'qilletni-src' or 'examples', without walking above the
+     * file's content root (so an unrelated 'examples' directory outside the project is never matched).
+     */
+    private static VirtualFile findQilletniRoot(VirtualFile vf, ProjectFileIndex fileIndex) {
+        var contentRoot = fileIndex.getContentRootForFile(vf);
+        for (var cur = vf.getParent(); cur != null; cur = cur.getParent()) {
+            var name = cur.getName();
+            if (QILLETNI_SRC.equals(name) || EXAMPLES.equals(name)) return cur;
+            if (cur.equals(contentRoot)) break;
+        }
+        return null;
     }
 }

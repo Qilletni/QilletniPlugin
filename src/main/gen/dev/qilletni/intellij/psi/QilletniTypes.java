@@ -52,6 +52,7 @@ public interface QilletniTypes {
   IElementType LOGICAL_OR_EXPR = QilletniElementTypeFactory.createElementType("LOGICAL_OR_EXPR");
   IElementType MULTIPLICATIVE_EXPR = QilletniElementTypeFactory.createElementType("MULTIPLICATIVE_EXPR");
   IElementType ORDER_DEFINE = QilletniElementTypeFactory.createElementType("ORDER_DEFINE");
+  IElementType ORDER_SETTINGS = QilletniElementTypeFactory.createElementType("ORDER_SETTINGS");
   IElementType PARAM_NAME = QilletniElementTypeFactory.createElementType("PARAM_NAME");
   IElementType PLAY_STMT = QilletniElementTypeFactory.createElementType("PLAY_STMT");
   IElementType POSTFIX_EXPR = QilletniElementTypeFactory.createElementType("POSTFIX_EXPR");
@@ -279,6 +280,9 @@ public interface QilletniTypes {
       }
       else if (type == ORDER_DEFINE) {
         return new QilletniOrderDefineImpl(node);
+      }
+      else if (type == ORDER_SETTINGS) {
+        return new QilletniOrderSettingsImpl(node);
       }
       else if (type == PARAM_NAME) {
         return new QilletniParamNameImpl(node);

@@ -13,14 +13,14 @@ public interface QilletniCollectionExpr extends PsiElement {
   @Nullable
   QilletniListExpression getListExpression();
 
-  @Nullable
-  QilletniOrderDefine getOrderDefine();
-
-  @Nullable
-  QilletniWeightsDefine getWeightsDefine();
+  @NotNull
+  QilletniOrderSettings getOrderSettings();
 
   @Nullable
   PsiElement getCollectionType();
+
+  @Nullable
+  PsiElement getId();
 
   @Nullable
   PsiElement getLeftParen();

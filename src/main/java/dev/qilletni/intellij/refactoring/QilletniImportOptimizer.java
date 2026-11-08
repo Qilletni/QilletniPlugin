@@ -1,7 +1,6 @@
 package dev.qilletni.intellij.refactoring;
 
 import com.intellij.lang.ImportOptimizer;
-import com.intellij.openapi.project.Project;
 import com.intellij.psi.PsiFile;
 import dev.qilletni.intellij.QilletniFile;
 import org.jetbrains.annotations.NotNull;

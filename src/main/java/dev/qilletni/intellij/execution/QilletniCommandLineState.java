@@ -1,116 +1,129 @@
 package dev.qilletni.intellij.execution;
 
 import com.intellij.execution.ExecutionException;
+import com.intellij.execution.Executor;
 import com.intellij.execution.configurations.JavaCommandLineState;
 import com.intellij.execution.configurations.JavaParameters;
+import com.intellij.execution.process.OSProcessHandler;
 import com.intellij.execution.runners.ExecutionEnvironment;
-import com.intellij.openapi.roots.ProjectRootManager;
+import com.intellij.execution.ui.ConsoleView;
+import com.intellij.execution.ui.ConsoleViewContentType;
+import com.intellij.util.execution.ParametersListUtil;
+import dev.qilletni.intellij.QilletniBundle;
+import dev.qilletni.intellij.library.model.QilletniLockfile;
 import dev.qilletni.intellij.runconfig.QilletniRunConfiguration;
-import dev.qilletni.intellij.toolchain.QilletniToolchainSettings;
+import dev.qilletni.intellij.toolchain.QilletniToolchainLauncher;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
-import java.nio.charset.StandardCharsets;
+import java.io.IOException;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 
+/**
+ * Runs {@code qilletni run}. The program's output and the toolchain's log events share the Run console; log events
+ * are colored by level. Only log events at or above the configuration's log level are shown.
+ */
 public final class QilletniCommandLineState extends JavaCommandLineState {
     private final QilletniRunConfiguration cfg;
-    private QilletniBuildViewLogServer logServer;
-    private final java.util.concurrent.atomic.AtomicBoolean sawProgramOutput = new java.util.concurrent.atomic.AtomicBoolean(false);
+    private QilletniLogStream logStream;
+    private ConsoleView console;
+    private @Nullable Integer debugPort;
 
     public QilletniCommandLineState(@NotNull ExecutionEnvironment env, @NotNull QilletniRunConfiguration cfg) {
         super(env);
         this.cfg = cfg;
+        addConsoleFilters(new QilletniOutputHyperlinkFilter(env.getProject()));
+    }
+
+    /** Debugs instead of running: the toolchain connects to the IDE's debug adapter client on {@code port}. */
+    public void setDebugPort(int port) {
+        debugPort = port;
     }
 
     @Override
     protected JavaParameters createJavaParameters() throws ExecutionException {
-        var params = new JavaParameters();
-
-        var projectSdk = ProjectRootManager.getInstance(getEnvironment().getProject()).getProjectSdk();
-        if (projectSdk == null) {
-            throw new ExecutionException("No Project SDK configured.");
-        }
-        params.setJdk(projectSdk);
-
-        // Resolve SDK JAR from Toolchain settings, put it on the classpath, and run the main class.
-        var toolchainState = QilletniToolchainSettings.getInstance().getState();
-        var sdkJarPath = toolchainState != null ? toolchainState.toolchainPath : null;
-        if (sdkJarPath == null || sdkJarPath.isBlank()) {
-            throw new ExecutionException("Qilletni SDK JAR not configured. Configure it in Settings | Qilletni: Toolchain.");
-        }
-        params.getClassPath().add(sdkJarPath);
-        params.setMainClass("dev.qilletni.toolchain.QilletniToolchainApplication");
-
-        params.getProgramParametersList().add("run");
-        // Inject optional local library before the target path
-        if (cfg.localLibrary != null && !cfg.localLibrary.isBlank()) {
-            var absoluteLib = java.nio.file.Path.of(cfg.localLibrary).toAbsolutePath().normalize().toString();
-            params.getProgramParametersList().add("--local-library");
-            params.getProgramParametersList().add(absoluteLib);
-
-            if (cfg.useNativeJar) {
-                params.getProgramParametersList().add("--use-native-jar");
-            }
-        }
-        params.getProgramParametersList().add(cfg.targetPath);
-
-        // Program args: use ParametersList parsing to respect quotes and spaces.
-        if (cfg.args != null && !cfg.args.isBlank()) {
-            params.getProgramParametersList().addParametersString(cfg.args);
-        }
-
-        // Determine working directory for Build View descriptor
-        String workingDirectory = cfg.workingDir != null ? cfg.workingDir : getEnvironment().getProject().getBasePath();
-
-        // Prepare per-run toolchain log server and pass port
         try {
-            var title = "Building " + cfg.getName();
-            logServer = new QilletniBuildViewLogServer(getEnvironment().getProject(), title, workingDirectory != null ? workingDirectory : "");
-            params.getProgramParametersList().add("--log-port");
-            params.getProgramParametersList().add(Integer.toString(logServer.getPort()));
-        } catch (Exception e) {
-            throw new ExecutionException("Failed to start Qilletni log server", e);
+            logStream = new QilletniLogStream();
+        } catch (IOException e) {
+            throw new ExecutionException(QilletniBundle.message("runconfig.error.logServer"), e);
         }
 
-        params.setWorkingDirectory(cfg.workingDir);
-        params.setCharset(StandardCharsets.UTF_8);
-        params.setEnv(cfg.env);
+        // Pass the lockfile explicitly so the run doesn't depend on the working directory
+        var model = cfg.findQilletniProject();
+        var lockfile = model != null ? model.srcRoot().findChild(QilletniLockfile.FILE_NAME) : null;
+        var args = buildArgs(cfg, lockfile != null ? lockfile.getPath() : null, logStream.getPort(), debugPort);
+
+        var params = QilletniToolchainLauncher.javaParameters(getEnvironment().getProject(), args);
+        params.setWorkingDirectory(cfg.effectiveWorkingDir());
+        params.setEnv(cfg.env.getEnvs());
+        params.setPassParentEnvs(cfg.env.isPassParentEnvs());
         return params;
     }
 
-    @Override
-    protected com.intellij.execution.process.OSProcessHandler startProcess() throws ExecutionException {
-        var handler = super.startProcess();
+    static @NotNull List<String> buildArgs(@NotNull QilletniRunConfiguration cfg, @Nullable String lockfilePath, int logPort) {
+        return buildArgs(cfg, lockfilePath, logPort, null);
+    }
 
-        // Start pumping toolchain logs into the Build View
-        if (logServer != null) {
-            logServer.attachTo(handler);
+    /** Arguments for {@code qilletni run}: options first, then the script and its own arguments. */
+    static @NotNull List<String> buildArgs(@NotNull QilletniRunConfiguration cfg, @Nullable String lockfilePath, int logPort,
+                                           @Nullable Integer debugPort) {
+        var args = new ArrayList<String>();
+        args.add("run");
+        if (!cfg.localLibrary.isBlank()) {
+            args.add("--local-library");
+            args.add(Path.of(cfg.localLibrary).toAbsolutePath().normalize().toString());
+            if (cfg.useNativeJar) args.add("--use-native-jar");
         }
+        if (lockfilePath != null) {
+            args.add("--lockfile");
+            args.add(lockfilePath);
+        }
+        args.add("--log-port");
+        args.add(Integer.toString(logPort));
+        if (debugPort != null) {
+            args.add("--debug-port");
+            args.add(Integer.toString(debugPort));
+        }
+        args.add(cfg.targetPath);
+        args.addAll(ParametersListUtil.parse(cfg.args));
+        return args;
+    }
 
-        // Show Run tool window only on first program output; otherwise print <no output> on termination
-        handler.addProcessListener(new com.intellij.execution.process.ProcessAdapter() {
-            private final java.util.concurrent.atomic.AtomicBoolean activated = new java.util.concurrent.atomic.AtomicBoolean(false);
-            @Override
-            public void onTextAvailable(@NotNull com.intellij.execution.process.ProcessEvent event, @NotNull com.intellij.openapi.util.Key outputType) {
-                if (sawProgramOutput.compareAndSet(false, true)) {
-                    // Activate Run tool window on first actual program output
-                    var project = getEnvironment().getProject();
-                    com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater(() -> {
-                        var tw = com.intellij.openapi.wm.ToolWindowManager.getInstance(project).getToolWindow(com.intellij.openapi.wm.ToolWindowId.RUN);
-                        if (tw != null && activated.compareAndSet(false, true)) tw.activate(null, false, true);
-                    });
-                }
-            }
+    @Override
+    protected @NotNull ConsoleView createConsole(@NotNull Executor executor) throws ExecutionException {
+        console = super.createConsole(executor);
+        return console;
+    }
 
-            @Override
-            public void processTerminated(@NotNull com.intellij.execution.process.ProcessEvent event) {
-                if (!sawProgramOutput.get()) {
-                    var console = getConsoleBuilder().getConsole();
-                    com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater(() ->
-                            console.print("<no output>\n", com.intellij.execution.ui.ConsoleViewContentType.SYSTEM_OUTPUT));
-                }
-            }
-        });
-
+    @Override
+    protected @NotNull OSProcessHandler startProcess() throws ExecutionException {
+        OSProcessHandler handler;
+        try {
+            handler = super.startProcess();
+        } catch (ExecutionException | RuntimeException e) {
+            if (logStream != null) logStream.close();
+            throw e;
+        }
+        logStream.attach(handler, this::print);
         return handler;
+    }
+
+    /** Whether a toolchain log event at {@code level} belongs in the Run console for the chosen {@code threshold}. */
+    static boolean shouldShow(@NotNull QilletniLogStream.Level level, @NotNull QilletniLogStream.Level threshold) {
+        return level.compareTo(threshold) >= 0;
+    }
+
+    private void print(QilletniLogStream.LogRecord record) {
+        if (console == null || !shouldShow(record.level(), cfg.logLevel)) return;
+        var type = switch (record.level()) {
+            case ERROR -> ConsoleViewContentType.LOG_ERROR_OUTPUT;
+            case WARN -> ConsoleViewContentType.LOG_WARNING_OUTPUT;
+            case INFO -> ConsoleViewContentType.LOG_INFO_OUTPUT;
+            case DEBUG, TRACE -> ConsoleViewContentType.LOG_DEBUG_OUTPUT;
+        };
+        console.print(record.formatLine() + "\n", type);
+        if (record.stackTrace() != null) console.print(record.stackTrace() + "\n", type);
     }
 }

@@ -1,19 +1,16 @@
 package dev.qilletni.intellij.library.model;
 
-import com.google.gson.annotations.SerializedName;
-import dev.qilletni.api.lib.qll.Version;
-
 import java.util.List;
 
 /**
  * Metadata model for a Qilletni library contained in a .qll archive.
- * Mirrors the qll.info JSON structure.
- *
- * TODO: Import the Qilletni API for this instead
+ * Mirrors the qll.info JSON structure. Versions are kept as raw strings (e.g. {@code 1.0.0},
+ * {@code 1.0.0-SNAPSHOT}, or a range such as {@code ^1.0.0} for dependencies); use {@link QllVersion} to compare them.
  */
 public record QllInfo(
+        String scope,
         String name,
-        Version version,
+        String version,
         String author,
         String description,
         String sourceUrl,
@@ -23,9 +20,9 @@ public record QllInfo(
         List<String> nativeClasses,
         List<String> autoImportFiles
 ) {
-    /** Minimal shape for dependency entry; expanded later if needed. */
     public record Dependency(
+            String scope,
             String name,
-            Version version
+            String version
     ) {}
 }

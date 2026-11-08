@@ -1,22 +1,26 @@
 package dev.qilletni.intellij.psi.stubs.types;
 
-import com.intellij.lang.ASTNode;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.stubs.*;
 import com.intellij.psi.util.PsiTreeUtil;
 import com.intellij.util.io.StringRef;
+import dev.qilletni.intellij.QilletniLanguage;
+import dev.qilletni.intellij.index.QilletniExtMethodIndex;
+import dev.qilletni.intellij.index.QilletniFunctionIndex;
 import dev.qilletni.intellij.index.QilletniIndexConstants;
-import dev.qilletni.intellij.psi.*;
+import dev.qilletni.intellij.psi.QilletniEntityDef;
+import dev.qilletni.intellij.psi.QilletniFunctionDef;
 import dev.qilletni.intellij.psi.impl.QilletniFunctionDefImpl;
 import dev.qilletni.intellij.psi.stubs.QilletniFunctionDefStub;
 import dev.qilletni.intellij.psi.stubs.impl.QilletniFunctionDefStubImpl;
+import dev.qilletni.intellij.resolve.QilletniPsiUtil;
 import org.jetbrains.annotations.NotNull;
 
 import java.io.IOException;
 
 public final class QilletniFunctionDefElementType extends IStubElementType<QilletniFunctionDefStub, QilletniFunctionDef> {
     public QilletniFunctionDefElementType() {
-        super("FUNCTION_DEF", dev.qilletni.intellij.QilletniLanguage.INSTANCE);
+        super("FUNCTION_DEF", QilletniLanguage.INSTANCE);
     }
 
     @Override
@@ -26,25 +30,13 @@ public final class QilletniFunctionDefElementType extends IStubElementType<Qille
 
     @Override
     public @NotNull QilletniFunctionDefStub createStub(@NotNull QilletniFunctionDef psi, StubElement<?> parentStub) {
-        String name = psi.getFunctionName().getId().getText();
+        var functionName = psi.getFunctionName();
+        String name = functionName != null && functionName.getId() != null ? functionName.getId().getText() : null;
         boolean isExt = psi.getFunctionOnType() != null;
         String receiver = null;
         if (isExt) {
-            System.out.println("[DEBUG_LOG][Stub] createStub for function '" + name + "' isExtension=true");
-            // Extract the simple on-type name: take the LAST ID child under functionOnType.
-            // This avoids picking the 'on' keyword or qualifiers and matches unqualified types per current scope.
-            PsiElement id = null;
-            for (PsiElement c = psi.getFunctionOnType().getFirstChild(); c != null; c = c.getNextSibling()) {
-                if (c.getNode() != null) {
-                    var t = c.getNode().getElementType();
-                    if (t == QilletniTypes.ID
-                            || t == QilletniTypes.ANY_TYPE || t == QilletniTypes.INT_TYPE || t == QilletniTypes.DOUBLE_TYPE
-                            || t == QilletniTypes.STRING_TYPE || t == QilletniTypes.BOOLEAN_TYPE || t == QilletniTypes.COLLECTION_TYPE
-                            || t == QilletniTypes.SONG_TYPE || t == QilletniTypes.ALBUM_TYPE || t == QilletniTypes.JAVA_TYPE) {
-                        id = c; // keep last seen eligible token
-                    }
-                }
-            }
+            // The receiver is the last type token of the on-clause; qualifiers are not part of the key
+            PsiElement id = QilletniPsiUtil.receiverTypeToken(psi.getFunctionOnType());
             receiver = id != null ? id.getText() : null;
         }
         boolean inEntity = PsiTreeUtil.getParentOfType(psi, QilletniEntityDef.class, false) != null;
@@ -86,14 +78,13 @@ public final class QilletniFunctionDefElementType extends IStubElementType<Qille
         String name = s.getName();
         if (name != null && !name.isBlank()) {
             if (!s.isExtension() && !s.isInEntity()) {
-                sink.occurrence(StubIndexKey.createIndexKey(QilletniIndexConstants.FUNCTION_INDEX_NAME), name);
+                sink.occurrence(QilletniFunctionIndex.KEY, name);
             }
             if (s.isExtension()) {
-                System.out.println("[DEBUG_LOG][Stub] indexStub ext method name='" + name + "' receiver='" + s.getReceiverSimple() + "'");
                 String recv = s.getReceiverSimple();
-                String key = dev.qilletni.intellij.index.QilletniIndexConstants.extMethodKey(recv, name);
+                String key = QilletniIndexConstants.extMethodKey(recv, name);
                 if (!key.isBlank()) {
-                    sink.occurrence(StubIndexKey.createIndexKey(QilletniIndexConstants.EXT_METHOD_INDEX_NAME), key);
+                    sink.occurrence(QilletniExtMethodIndex.KEY, key);
                 }
             }
         }

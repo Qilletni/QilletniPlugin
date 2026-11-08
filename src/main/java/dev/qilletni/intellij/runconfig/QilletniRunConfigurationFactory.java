@@ -7,7 +7,7 @@ import com.intellij.openapi.project.Project;
 import org.jetbrains.annotations.NotNull;
 
 public final class QilletniRunConfigurationFactory extends ConfigurationFactory {
-    protected QilletniRunConfigurationFactory(@NotNull ConfigurationType type) {
+    QilletniRunConfigurationFactory(@NotNull ConfigurationType type) {
         super(type);
     }
 

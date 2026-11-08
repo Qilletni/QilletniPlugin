@@ -32,4 +32,10 @@ public class QilletniAlbumExprImpl extends QilletniPsiElementBase implements Qil
     return notNullChild(PsiTreeUtil.getChildOfType(this, QilletniAlbumUrlOrNamePair.class));
   }
 
+  @Override
+  @NotNull
+  public QilletniOrderSettings getOrderSettings() {
+    return notNullChild(PsiTreeUtil.getChildOfType(this, QilletniOrderSettings.class));
+  }
+
 }

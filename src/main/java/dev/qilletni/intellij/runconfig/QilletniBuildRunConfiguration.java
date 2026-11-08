@@ -1,32 +1,34 @@
 package dev.qilletni.intellij.runconfig;
 
+import com.intellij.execution.ExecutionException;
 import com.intellij.execution.Executor;
-import com.intellij.execution.configurations.*;
+import com.intellij.execution.configurations.ConfigurationFactory;
+import com.intellij.execution.configurations.RunConfiguration;
+import com.intellij.execution.configurations.RunProfileState;
 import com.intellij.execution.runners.ExecutionEnvironment;
 import com.intellij.openapi.options.SettingsEditor;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.util.JDOMExternalizerUtil;
-import com.intellij.openapi.util.text.StringUtil;
 import dev.qilletni.intellij.execution.QilletniBuildCommandLineState;
-import dev.qilletni.intellij.toolchain.QilletniToolchainService;
 import org.jdom.Element;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-import java.io.File;
-import java.util.HashMap;
-import java.util.Map;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Comparator;
 
-public final class QilletniBuildRunConfiguration extends RunConfigurationBase<Object> {
-    public String targetPath = "";
-    public String args = "";
-    public Map<String, String> env = new HashMap<>();
-    public String toolchainOverride = "";
+/** Builds a library into a .qll with {@code qilletni build}. The target is the project directory. */
+public final class QilletniBuildRunConfiguration extends QilletniRunConfigurationBase {
+    /** Where to write the .qll; blank uses the toolchain default ({@code build/ql-build}). */
     public String outputDir = "";
-    public boolean buildJar = false;
+    /** Whether to rebuild native.jar with Gradle; {@code false} passes {@code --no-build-jar}. */
+    public boolean rebuildNativeJar = true;
+    /** Passes {@code --gradle-verbose}. */
     public boolean verboseGradle = false;
 
-    protected QilletniBuildRunConfiguration(@NotNull Project project, @NotNull ConfigurationFactory factory, String name) {
+    QilletniBuildRunConfiguration(@NotNull Project project, @NotNull ConfigurationFactory factory, String name) {
         super(project, factory, name);
     }
 
@@ -36,45 +38,38 @@ public final class QilletniBuildRunConfiguration extends RunConfigurationBase<Ob
     }
 
     @Override
-    public void checkConfiguration() throws RuntimeConfigurationException {
-        if (StringUtil.isEmptyOrSpaces(targetPath)) throw new RuntimeConfigurationError("Target path is required");
-        var file = new File(targetPath);
-        if (!file.exists()) throw new RuntimeConfigurationError("Target does not exist");
-
-        if (StringUtil.isEmptyOrSpaces(outputDir)) {
-            throw new RuntimeConfigurationError("Output directory is required");
-        }
-
-        var toolchain = QilletniToolchainService.getInstance(getProject());
-        var result = toolchain.validate();
-        if (!result.ok()) throw new RuntimeConfigurationError(result.message() != null ? result.message() : "Invalid toolchain");
+    public @NotNull RunProfileState getState(@NotNull Executor executor, @NotNull ExecutionEnvironment environment) throws ExecutionException {
+        checkExecutor(executor);
+        return new QilletniBuildCommandLineState(environment, this);
     }
 
-    @Override
-    public @Nullable RunProfileState getState(@NotNull Executor executor, @NotNull ExecutionEnvironment environment) {
-        return new QilletniBuildCommandLineState(environment, this);
+    /** The archive written by the last build when a custom output is set; {@code null} means the default location. */
+    public @Nullable Path findBuiltArchive() {
+        if (outputDir.isBlank()) return null;
+        var output = Path.of(outputDir);
+        if (outputDir.endsWith(".qll")) return output;
+        try (var files = Files.list(output)) {
+            return files.filter(f -> f.getFileName().toString().endsWith(".qll"))
+                    .max(Comparator.comparingLong(f -> f.toFile().lastModified()))
+                    .orElse(null);
+        } catch (IOException e) {
+            return null;
+        }
     }
 
     @Override
     public void readExternal(@NotNull Element element) {
         super.readExternal(element);
-        targetPath = JDOMExternalizerUtil.readField(element, "targetPath", "");
-        args = JDOMExternalizerUtil.readField(element, "args", "");
-        toolchainOverride = JDOMExternalizerUtil.readField(element, "toolchainOverride", "");
         outputDir = JDOMExternalizerUtil.readField(element, "outputDir", "");
-        buildJar = Boolean.parseBoolean(JDOMExternalizerUtil.readField(element, "buildJar", "false"));
+        rebuildNativeJar = Boolean.parseBoolean(JDOMExternalizerUtil.readField(element, "rebuildNativeJar", "true"));
         verboseGradle = Boolean.parseBoolean(JDOMExternalizerUtil.readField(element, "verboseGradle", "false"));
-        // env is serialized by the UI component in the editor if present
     }
 
     @Override
     public void writeExternal(@NotNull Element element) {
         super.writeExternal(element);
-        JDOMExternalizerUtil.writeField(element, "targetPath", targetPath);
-        JDOMExternalizerUtil.writeField(element, "args", args);
-        JDOMExternalizerUtil.writeField(element, "toolchainOverride", toolchainOverride);
         JDOMExternalizerUtil.writeField(element, "outputDir", outputDir);
-        JDOMExternalizerUtil.writeField(element, "buildJar", Boolean.toString(buildJar));
+        JDOMExternalizerUtil.writeField(element, "rebuildNativeJar", Boolean.toString(rebuildNativeJar));
         JDOMExternalizerUtil.writeField(element, "verboseGradle", Boolean.toString(verboseGradle));
     }
 }

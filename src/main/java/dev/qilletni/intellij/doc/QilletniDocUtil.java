@@ -13,6 +13,7 @@ import com.intellij.psi.TokenType;
 import com.intellij.psi.util.PsiTreeUtil;
 import dev.qilletni.intellij.psi.*;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import static dev.qilletni.intellij.QilletniSyntaxHighlighter.NATIVE_TYPES_LIST;
@@ -130,28 +131,6 @@ public final class QilletniDocUtil {
         return s;
     }
 
-    // Minimal markdown-to-HTML conversion for common patterns
-    private static String markdownToHtml(String md) {
-        if (md == null || md.isEmpty()) return null;
-        String html = escapeHtml(md);
-
-        // code blocks ```...```
-        html = html.replaceAll("(?s)```\\n?(.*?)\\n?```", "<pre><code>$1</code></pre>");
-        // inline code `...`
-        html = html.replaceAll("`([^`]+)`", "<code>$1</code>");
-        // bold **...**
-        html = html.replaceAll("\\*\\*([^*]+)\\*\\*", "<b>$1</b>");
-        // italics *...*
-        html = html.replaceAll("(?<!\\*)\\*([^*]+)\\*(?!\\*)", "<i>$1</i>");
-        // simple headers: lines starting with #, ##, ###
-        html = html.replaceAll("(?m)^###\\s*(.+)$", "<b>$1</b>");
-        html = html.replaceAll("(?m)^##\\s*(.+)$", "<b>$1</b>");
-        html = html.replaceAll("(?m)^#\\s*(.+)$", "<b>$1</b>");
-        // line breaks
-        html = html.replace("\n", "<br/>");
-        return html;
-    }
-
     private static String escapeHtml(String s) {
         return s.replace("&", "&amp;")
                 .replace("<", "&lt;")
@@ -215,7 +194,7 @@ public final class QilletniDocUtil {
 
     private static final class DocComment {
         final StringBuilder description = new StringBuilder();
-        final java.util.List<ParamDoc> params = new java.util.ArrayList<>();
+        final List<ParamDoc> params = new ArrayList<>();
         final StringBuilder returns = new StringBuilder();
         TypeInfo type;  // from @type
         InlineMeta returnsMeta; // from inline_brackets on @returns
@@ -224,24 +203,10 @@ public final class QilletniDocUtil {
         final StringBuilder errors = new StringBuilder();
     }
 
-    private static boolean looksLikeTagLine(String trimmed) {
-        return trimmed.startsWith("@param")
-                || trimmed.startsWith("@returns")
-                || trimmed.startsWith("@type")
-                || trimmed.startsWith("@on")
-                || trimmed.startsWith("@errors");
-    }
-
     private static String ltrim(String s) {
         int i = 0;
         while (i < s.length() && Character.isWhitespace(s.charAt(i))) i++;
         return (i == 0) ? s : s.substring(i);
-    }
-
-    private static String rtrim(String s) {
-        int i = s.length() - 1;
-        while (i >= 0 && Character.isWhitespace(s.charAt(i))) i--;
-        return (i == s.length() - 1) ? s : s.substring(0, i + 1);
     }
 
     private static final class BracketParse {
@@ -868,26 +833,11 @@ public final class QilletniDocUtil {
     /**
      * Return an empty list if parameters are not available.
      */
-    private static java.util.List<String> getFunctionParameterDisplay(QilletniFunctionDef functionDef) {
+    private static List<String> getFunctionParameterDisplay(QilletniFunctionDef functionDef) {
         return functionDef.getFunctionDefParams().getParamNameList().stream().map(QilletniParamName::getName).toList();
     }
 
-    /**
-     * TODO: Extract constructor parameter display strings.
-     */
-    private static java.util.List<String> getConstructorParameterDisplay(QilletniEntityConstructor entityConstructor) {
+    private static List<String> getConstructorParameterDisplay(QilletniEntityConstructor entityConstructor) {
         return entityConstructor.getFunctionDefParams().getParamNameList().stream().map(QilletniParamName::getName).toList();
-    }
-
-    /**
-     * Heuristic: treat types that look like Java FQNs as Java types.
-     * You can replace with a reliable check once your type system is integrated.
-     */
-    private static boolean isJavaType(String typeText) {
-        if (typeText == null) return false;
-        String t = typeText.trim();
-        // naive: contains a dot and starts with a lowercase package segment
-        int dot = t.indexOf('.');
-        return dot > 0 && Character.isLowerCase(t.charAt(0));
     }
 }

@@ -14,7 +14,16 @@
     <!-- Description of the plugin displayed on the Plugin Page and IDE Plugin Manager.
          Guidelines: https://plugins.jetbrains.com/docs/marketplace/best-practices-for-listing.html#plugin-description -->
     <description><![CDATA[
-        Qilletni language support: syntax, references, and integrations. Adds Spotify-assisted selection for songs, albums, and collections.
+        <p>Support for <a href="https://qilletni.dev/">Qilletni</a>, a language for working with music streaming services.</p>
+        <ul>
+            <li>Highlighting, completion, navigation, Find Usages, Rename, structure view, folding and documentation</li>
+            <li>Run scripts and build packages with the Qilletni toolchain, with logs in the Run and Build tool windows</li>
+            <li>Debug scripts with breakpoints, stepping, variables and Evaluate Expression (requires a toolchain with debugger support)</li>
+            <li>Dependencies from <code>qilletni_info.yml</code> and <code>qilletni.lock</code>, with one-click <code>qpm install</code>, publishing and registry completion</li>
+            <li>Spotify-assisted music: pick songs, albums and playlists from Spotify while you type</li>
+            <li>Navigation between <code>native fun</code> declarations and their Java implementations</li>
+        </ul>
+        <p>Start with File | New | Project | Qilletni, or open a project containing <code>qilletni-src/qilletni_info.yml</code>.</p>
     ]]></description>
 
     <!-- Product and plugin compatibility requirements.
@@ -40,6 +49,16 @@
 
         <psi.referenceContributor language="yaml" implementation="dev.qilletni.intellij.yaml.QilletniYamlReferenceContributor"/>
         <completion.contributor language="yaml" implementationClass="dev.qilletni.intellij.yaml.QilletniYamlNativeClassCompletionContributor"/>
+        <completion.contributor language="yaml" implementationClass="dev.qilletni.intellij.packages.QilletniManifestCompletionContributor"/>
+        <localInspection language="yaml"
+                         groupPath="Qilletni"
+                         shortName="QilletniDependencyNotInstalled"
+                         bundle="messages.QilletniBundle"
+                         key="inspection.dependency.displayName"
+                         groupName="Qilletni"
+                         enabledByDefault="true"
+                         level="WARNING"
+                         implementationClass="dev.qilletni.intellij.packages.QilletniDependencyInspection"/>
         <localInspection language="yaml"
                           groupPath="Qilletni"
                           shortName="QilletniYamlNativeClassResolve"
@@ -49,24 +68,27 @@
 
         <psi.referenceContributor language="Qilletni" implementation="dev.qilletni.intellij.references.QilletniReferenceContributor"/>
         <completion.contributor language="Qilletni" implementationClass="dev.qilletni.intellij.completion.QilletniCompletionContributor"/>
-        <completion.contributor language="Qilletni" implementationClass="dev.qilletni.intellij.completion.QilletniAutoImportCompletionContributor"/>
         <lang.findUsagesProvider language="Qilletni" implementationClass="dev.qilletni.intellij.findusages.QilletniFindUsagesProvider"/>
         <renamePsiElementProcessor implementation="dev.qilletni.intellij.refactoring.QilletniRenameEntityAndConstructorProcessor"/>
 
         <lang.braceMatcher language="Qilletni" implementationClass="dev.qilletni.intellij.QilletniBraceMatcher"/>
+        <lang.commenter language="Qilletni" implementationClass="dev.qilletni.intellij.editor.QilletniCommenter"/>
+        <lang.foldingBuilder language="Qilletni" implementationClass="dev.qilletni.intellij.editor.QilletniFoldingBuilder"/>
+        <lang.psiStructureViewFactory language="Qilletni" implementationClass="dev.qilletni.intellij.editor.QilletniStructureViewFactory"/>
+        <lang.namesValidator language="Qilletni" implementationClass="dev.qilletni.intellij.editor.QilletniNamesValidator"/>
+        <breadcrumbsInfoProvider implementation="dev.qilletni.intellij.editor.QilletniBreadcrumbsProvider"/>
+        <liveTemplateContext contextId="Qilletni" implementation="dev.qilletni.intellij.editor.QilletniTemplateContextType"/>
+        <defaultLiveTemplates file="/liveTemplates/Qilletni.xml"/>
+        <internalFileTemplate name="Qilletni File"/>
+        <internalFileTemplate name="Qilletni Entity"/>
         <lang.quoteHandler language="Qilletni" implementationClass="dev.qilletni.intellij.QilletniQuoteHandler"/>
         <enterHandlerDelegate implementation="dev.qilletni.intellij.QilletniEnterHandler"/>
+        <typedHandler implementation="dev.qilletni.intellij.completion.QilletniTypedHandler"/>
         <intentionAction>
             <language>Qilletni</language>
             <category>Qilletni</category>
             <className>dev.qilletni.intellij.intentions.QilletniSelectSpotifyIntention</className>
             <descriptionDirectoryName>dev.qilletni.intellij.intentions.QilletniSelectSpotifyIntention</descriptionDirectoryName>
-        </intentionAction>
-        <intentionAction>
-            <language>Qilletni</language>
-            <category>Qilletni</category>
-            <className>dev.qilletni.intellij.intentions.QilletniInsertMusicIntention</className>
-            <descriptionDirectoryName>dev.qilletni.intellij.intentions.QilletniInsertMusicIntention</descriptionDirectoryName>
         </intentionAction>
         <codeInsight.lineMarkerProvider language="Qilletni" implementationClass="dev.qilletni.intellij.gutter.QilletniMusicLineMarkerProvider"/>
         <codeInsight.lineMarkerProvider language="Qilletni" implementationClass="dev.qilletni.intellij.gutter.QilletniNativeBindingLineMarkerProvider"/>
@@ -74,28 +96,54 @@
         <codeInsight.lineMarkerProvider language="JAVA" implementationClass="dev.qilletni.intellij.gutter.QilletniJavaClassToYamlLineMarkerProvider"/>
         <codeInsight.lineMarkerProvider language="yaml" implementationClass="dev.qilletni.intellij.gutter.QilletniYamlNativeClassLineMarkerProvider"/>
         <gotoDeclarationHandler implementation="dev.qilletni.intellij.yaml.QilletniJavaClassToYamlGotoDeclarationHandler"/>
-        <applicationConfigurable instance="dev.qilletni.intellij.settings.QilletniSpotifyConfigurable" id="dev.qilletni.intellij.settings.QilletniSpotifyConfigurable" displayName="Qilletni: Spotify" parentId="tools"/>
-        <applicationConfigurable instance="dev.qilletni.intellij.library.QilletniLibrariesConfigurable" id="dev.qilletni.intellij.settings.QilletniLibrariesConfigurable" displayName="Qilletni: Libraries" parentId="tools"/>
         <additionalLibraryRootsProvider implementation="dev.qilletni.intellij.library.QilletniAdditionalLibraryRootsProvider"/>
-        <applicationService serviceImplementation="dev.qilletni.intellij.library.QilletniLibrariesSettings"/>
+        <stubElementTypeHolder class="dev.qilletni.intellij.psi.QilletniTypes" externalIdPrefix="qilletni."/>
         <stubIndex implementation="dev.qilletni.intellij.index.QilletniEntityIndex"/>
         <stubIndex implementation="dev.qilletni.intellij.index.QilletniFunctionIndex"/>
         <stubIndex implementation="dev.qilletni.intellij.index.QilletniExtMethodIndex"/>
         <lang.importOptimizer language="Qilletni" implementationClass="dev.qilletni.intellij.refactoring.QilletniImportOptimizer"/>
 
         <applicationService serviceImplementation="dev.qilletni.intellij.toolchain.QilletniToolchainSettings"/>
-        <projectService serviceImplementation="dev.qilletni.intellij.toolchain.QilletniToolchainService"/>
+        <applicationService serviceImplementation="dev.qilletni.intellij.debugger.QilletniDebuggerSettings"/>
         
+        <projectConfigurable instance="dev.qilletni.intellij.settings.QilletniConfigurable"
+                              id="dev.qilletni.intellij.settings"
+                              key="settings.qilletni.displayName"
+                              parentId="language"
+                              nonDefaultProject="false"/>
+        <projectConfigurable instance="dev.qilletni.intellij.settings.QilletniSpotifyConfigurable"
+                             id="dev.qilletni.intellij.settings.services"
+                             key="settings.services.displayName"
+                             parentId="dev.qilletni.intellij.settings"
+                             nonDefaultProject="false"/>
+        <projectConfigurable instance="dev.qilletni.intellij.settings.QilletniRegistryConfigurable"
+                             id="dev.qilletni.intellij.settings.registry"
+                             key="settings.registry.displayName"
+                             parentId="dev.qilletni.intellij.settings"
+                             nonDefaultProject="false"/>
+
+        <toolWindow id="Qilletni" factoryClass="dev.qilletni.intellij.toolwindow.QilletniToolWindowFactory"
+                    anchor="right" icon="/icons/icon.svg" canCloseContents="false"/>
+        <toolWindow id="Weights Simulator" factoryClass="dev.qilletni.intellij.debugger.simulator.QilletniSimulatorToolWindowFactory"
+                    anchor="bottom" icon="AllIcons.Toolwindows.ToolWindowDataView" canCloseContents="false"/>
+        <editorNotificationProvider implementation="dev.qilletni.intellij.toolwindow.QilletniSetupNotificationProvider"/>
+
         <newProjectWizard.languageGenerator implementation="dev.qilletni.intellij.project.QilletniLanguageNewProjectWizard"/>
 
         <configurationType implementation="dev.qilletni.intellij.runconfig.QilletniRunConfigurationType"/>
         <configurationType implementation="dev.qilletni.intellij.runconfig.QilletniBuildRunConfigurationType"/>
         <runConfigurationProducer implementation="dev.qilletni.intellij.runconfig.QilletniRunConfigurationProducer"/>
-        <applicationConfigurable instance="dev.qilletni.intellij.toolchain.QilletniToolchainConfigurable" id="dev.qilletni.intellij.settings.QilletniToolchainConfigurable" displayName="Qilletni: Toolchain" parentId="tools"/>
-        <consoleFilterProvider implementation="dev.qilletni.intellij.execution.QilletniConsoleFilterProvider"/>
+        <runConfigurationProducer implementation="dev.qilletni.intellij.runconfig.QilletniBuildRunConfigurationProducer"/>
+        <runLineMarkerContributor language="Qilletni" implementationClass="dev.qilletni.intellij.runconfig.QilletniRunLineMarkerContributor"/>
+        <programRunner implementation="dev.qilletni.intellij.debugger.QilletniDebugRunner" order="first"/>
+        <xdebugger.breakpointType implementation="dev.qilletni.intellij.debugger.QilletniLineBreakpointType"/>
+        <xdebugger.breakpointType implementation="dev.qilletni.intellij.debugger.QilletniExceptionBreakpointType"/>
+        <xdebugger.breakpointType implementation="dev.qilletni.intellij.debugger.QilletniSongPlayedBreakpointType"/>
+        <xdebugger.breakpointType implementation="dev.qilletni.intellij.debugger.QilletniWeightSelectedBreakpointType"/>
 
-        <postStartupActivity implementation="dev.qilletni.intellij.project.QilletniSourceRootStartupActivity"/>
-        <notificationGroup id="Qilletni Source Root" displayType="BALLOON" isLogByDefault="false"/>
+        <postStartupActivity implementation="dev.qilletni.intellij.project.QilletniRootsListenerStartupActivity"/>
+        <postStartupActivity implementation="dev.qilletni.intellij.project.QilletniLibrariesStartupActivity"/>
+        <notificationGroup id="Qilletni" displayType="BALLOON" key="notification.group.qilletni"/>
 
         <localInspection language="Qilletni"
                           groupPath="Qilletni"
@@ -111,17 +159,67 @@
                 language="Qilletni"
                 nameKey="qilletni.inlay.receiverType.name"
                 providerId="qilletni.receiverType"/>
-        <toolWindow id="Qilletni Libraries" factoryClass="dev.qilletni.intellij.library.ui.QilletniLibrariesToolWindowFactory" anchor="right" canCloseContents="false"/>
     </extensions>
 
-    <actions>
-        <action id="dev.qilletni.intellij.actions.QilletniSelectSpotifyAction" class="dev.qilletni.intellij.actions.QilletniSelectSpotifyAction" text="Qilletni: Select Spotify music">
+    <actions resource-bundle="messages.QilletniBundle">
+        <action id="dev.qilletni.intellij.actions.QilletniSelectSpotifyAction" class="dev.qilletni.intellij.actions.QilletniSelectSpotifyAction">
             <add-to-group group-id="EditorPopupMenu" anchor="last"/>
-            <keyboard-shortcut keymap="Default for XWin" first-keystroke="ctrl alt M"/>
-            <keyboard-shortcut keymap="Mac OS X" first-keystroke="meta alt M"/>
+            <keyboard-shortcut keymap="$default" first-keystroke="ctrl alt M"/>
+            <keyboard-shortcut keymap="Mac OS X" first-keystroke="meta alt M" replace-all="true"/>
+            <keyboard-shortcut keymap="Mac OS X 10.5+" first-keystroke="meta alt M" replace-all="true"/>
         </action>
-        <action id="dev.qilletni.intellij.actions.QilletniResetLibraryCacheAction" class="dev.qilletni.intellij.actions.QilletniResetLibraryCacheAction" text="Qilletni: Reset Library Cache">
+
+        <action id="Qilletni.NewFile" class="dev.qilletni.intellij.editor.QilletniCreateFileAction" icon="/icons/icon.svg">
+            <add-to-group group-id="NewGroup" anchor="before" relative-to-action="NewFromTemplate"/>
+        </action>
+
+        <action id="Qilletni.Sync" class="dev.qilletni.intellij.actions.QilletniPackageActions$Sync" icon="AllIcons.Actions.Download"/>
+        <action id="Qilletni.UpdateLockfile" class="dev.qilletni.intellij.actions.QilletniPackageActions$UpdateLockfile" icon="AllIcons.Actions.ForceRefresh"/>
+        <action id="Qilletni.Build" class="dev.qilletni.intellij.actions.QilletniPackageActions$Build" icon="AllIcons.Actions.Compile"/>
+        <action id="Qilletni.PublishLocal" class="dev.qilletni.intellij.actions.QilletniPackageActions$PublishLocal" icon="AllIcons.Nodes.PpLib"/>
+        <action id="Qilletni.Publish" class="dev.qilletni.intellij.actions.QilletniPackageActions$Publish" icon="AllIcons.Actions.Upload"/>
+        <action id="Qilletni.GenerateDocs" class="dev.qilletni.intellij.actions.QilletniPackageActions$GenerateDocs" icon="AllIcons.Toolwindows.Documentation"/>
+        <action id="Qilletni.SpotifySignIn" class="dev.qilletni.intellij.actions.QilletniAccountActions$SpotifySignIn"/>
+        <action id="Qilletni.RegistryLogin" class="dev.qilletni.intellij.actions.QilletniAccountActions$RegistryLogin"/>
+        <action id="Qilletni.OpenSettings" class="dev.qilletni.intellij.actions.QilletniAccountActions$OpenSettings" icon="AllIcons.General.Settings"/>
+        <action id="Qilletni.ResetLibraryCache" class="dev.qilletni.intellij.actions.QilletniResetLibraryCacheAction"/>
+        <action id="Qilletni.Refresh" class="dev.qilletni.intellij.toolwindow.QilletniRefreshAction" icon="AllIcons.Actions.Refresh"/>
+
+        <group id="Qilletni.ToolsMenu" popup="true">
+            <reference ref="Qilletni.Sync"/>
+            <reference ref="Qilletni.UpdateLockfile"/>
+            <separator/>
+            <reference ref="Qilletni.Build"/>
+            <reference ref="Qilletni.PublishLocal"/>
+            <reference ref="Qilletni.Publish"/>
+            <reference ref="Qilletni.GenerateDocs"/>
+            <separator/>
+            <reference ref="Qilletni.SpotifySignIn"/>
+            <reference ref="Qilletni.RegistryLogin"/>
+            <separator/>
+            <reference ref="Qilletni.ResetLibraryCache"/>
+            <reference ref="Qilletni.OpenSettings"/>
             <add-to-group group-id="ToolsMenu" anchor="last"/>
-        </action>
+        </group>
+
+        <group id="Qilletni.ToolWindow.Toolbar">
+            <reference ref="Qilletni.Refresh"/>
+            <reference ref="Qilletni.Sync"/>
+            <separator/>
+            <reference ref="Qilletni.Build"/>
+            <reference ref="Qilletni.PublishLocal"/>
+            <reference ref="Qilletni.Publish"/>
+            <separator/>
+            <group id="Qilletni.ToolWindow.More" popup="true" icon="AllIcons.Actions.More">
+                <reference ref="Qilletni.UpdateLockfile"/>
+                <reference ref="Qilletni.GenerateDocs"/>
+                <separator/>
+                <reference ref="Qilletni.SpotifySignIn"/>
+                <reference ref="Qilletni.RegistryLogin"/>
+                <separator/>
+                <reference ref="Qilletni.ResetLibraryCache"/>
+                <reference ref="Qilletni.OpenSettings"/>
+            </group>
+        </group>
     </actions>
 </idea-plugin>

@@ -1,60 +1,50 @@
 package dev.qilletni.intellij.runconfig;
 
+import com.intellij.execution.actions.ConfigurationContext;
 import com.intellij.execution.actions.LazyRunConfigurationProducer;
-import com.intellij.execution.actions.RunConfigurationProducer;
 import com.intellij.execution.configurations.ConfigurationFactory;
-import com.intellij.execution.configurations.ConfigurationTypeUtil;
-import com.intellij.execution.configurations.RunConfiguration;
-import com.intellij.execution.impl.RunManagerImpl;
 import com.intellij.openapi.util.Ref;
 import com.intellij.openapi.util.text.StringUtil;
+import com.intellij.openapi.vfs.VfsUtilCore;
 import com.intellij.psi.PsiElement;
-import com.intellij.psi.PsiFile;
-import com.intellij.psi.util.PsiUtilCore;
-import dev.qilletni.intellij.QilletniLanguage;
+import dev.qilletni.intellij.QilletniFile;
+import dev.qilletni.intellij.library.QilletniProjectDependencies;
 import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
 
+/** Creates "Run 'file.ql'" from the editor, the project view or the gutter. */
 public final class QilletniRunConfigurationProducer extends LazyRunConfigurationProducer<QilletniRunConfiguration> {
-    public QilletniRunConfigurationProducer() {
-        super();
-    }
 
     @Override
-    protected boolean setupConfigurationFromContext(@NotNull QilletniRunConfiguration configuration, @NotNull com.intellij.execution.actions.ConfigurationContext context, @NotNull Ref<PsiElement> sourceElement) {
-        PsiFile file = context.getPsiLocation() != null ? context.getPsiLocation().getContainingFile() : null;
-        if (file == null || file.getVirtualFile() == null) return false;
-        if (!PsiUtilCore.getLanguageAtOffset(file, 0).isKindOf(QilletniLanguage.INSTANCE)) return false;
-        configuration.targetPath = file.getVirtualFile().getPath();
-        configuration.setName(file.getName());
-        var basePath = context.getProject().getBasePath();
-        configuration.workingDir = basePath != null ? basePath : "";
+    protected boolean setupConfigurationFromContext(@NotNull QilletniRunConfiguration configuration,
+                                                    @NotNull ConfigurationContext context,
+                                                    @NotNull Ref<PsiElement> sourceElement) {
+        var location = context.getPsiLocation();
+        if (location == null || !(location.getContainingFile() instanceof QilletniFile file)) return false;
+        var vf = file.getVirtualFile();
+        if (vf == null) return false;
 
-        // Auto-populate Local library when target is under <projectBase>/examples/... (examples is a direct child of base)
-        if (basePath != null) {
-            try {
-                var base = java.nio.file.Path.of(basePath).toAbsolutePath().normalize();
-                var examples = base.resolve("examples");
-                var target = java.nio.file.Path.of(configuration.targetPath).toAbsolutePath().normalize();
-                if (target.startsWith(examples)) {
-                    configuration.localLibrary = base.toString();
-                }
-            } catch (Exception ignored) {
-                // If anything goes wrong resolving paths, leave localLibrary empty
+        configuration.targetPath = vf.getPath();
+        configuration.setName(vf.getName());
+        // Examples of a library run against the library's own sources
+        var model = QilletniProjectDependencies.getInstance(context.getProject()).findProject(vf);
+        if (model != null) {
+            var examples = model.rootDir().findChild("examples");
+            if (examples != null && VfsUtilCore.isAncestor(examples, vf, true)) {
+                configuration.localLibrary = model.rootDir().getPath();
             }
         }
         return true;
     }
 
     @Override
-    public boolean isConfigurationFromContext(@NotNull QilletniRunConfiguration configuration, @NotNull com.intellij.execution.actions.ConfigurationContext context) {
-        PsiFile file = context.getPsiLocation() != null ? context.getPsiLocation().getContainingFile() : null;
-        if (file == null || file.getVirtualFile() == null) return false;
-        return StringUtil.equals(configuration.targetPath, file.getVirtualFile().getPath());
+    public boolean isConfigurationFromContext(@NotNull QilletniRunConfiguration configuration, @NotNull ConfigurationContext context) {
+        var location = context.getPsiLocation();
+        var file = location != null ? location.getContainingFile() : null;
+        return file != null && file.getVirtualFile() != null && StringUtil.equals(configuration.targetPath, file.getVirtualFile().getPath());
     }
 
     @Override
     public @NotNull ConfigurationFactory getConfigurationFactory() {
-        return new QilletniRunConfigurationFactory(QilletniRunConfigurationType.getInstance());
+        return QilletniRunConfigurationType.getInstance().getConfigurationFactories()[0];
     }
 }

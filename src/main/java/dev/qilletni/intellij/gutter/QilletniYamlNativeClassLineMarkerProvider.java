@@ -6,7 +6,6 @@ import com.intellij.icons.AllIcons;
 import com.intellij.openapi.editor.markup.GutterIconRenderer;
 import com.intellij.openapi.project.DumbService;
 import com.intellij.psi.PsiElement;
-import com.intellij.psi.PsiReference;
 import com.intellij.psi.PsiReferenceService;
 import com.intellij.util.PsiNavigateUtil;
 import dev.qilletni.intellij.yaml.YamlNativeClassesUtil;

@@ -1,13 +1,13 @@
 package dev.qilletni.intellij.psi.stubs.types;
 
-import com.intellij.lang.ASTNode;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.stubs.*;
 import com.intellij.util.io.StringRef;
+import dev.qilletni.intellij.QilletniLanguage;
+import dev.qilletni.intellij.index.QilletniEntityIndex;
 import dev.qilletni.intellij.index.QilletniIndexConstants;
 import dev.qilletni.intellij.psi.QilletniEntityDef;
 import dev.qilletni.intellij.psi.QilletniEntityName;
-import dev.qilletni.intellij.psi.QilletniTypes;
 import dev.qilletni.intellij.psi.impl.QilletniEntityDefImpl;
 import dev.qilletni.intellij.psi.stubs.QilletniEntityDefStub;
 import dev.qilletni.intellij.psi.stubs.impl.QilletniEntityDefStubImpl;
@@ -17,7 +17,7 @@ import java.io.IOException;
 
 public final class QilletniEntityDefElementType extends IStubElementType<QilletniEntityDefStub, QilletniEntityDef> {
     public QilletniEntityDefElementType() {
-        super("ENTITY_DEF", dev.qilletni.intellij.QilletniLanguage.INSTANCE);
+        super("ENTITY_DEF", QilletniLanguage.INSTANCE);
     }
 
     @Override
@@ -59,7 +59,7 @@ public final class QilletniEntityDefElementType extends IStubElementType<Qilletn
         if (stub instanceof QilletniEntityDefStubImpl s) {
             String name = s.getName();
             if (name != null && !name.isBlank()) {
-                sink.occurrence(StubIndexKey.createIndexKey(QilletniIndexConstants.ENTITY_INDEX_NAME), name);
+                sink.occurrence(QilletniEntityIndex.KEY, name);
             }
         }
     }

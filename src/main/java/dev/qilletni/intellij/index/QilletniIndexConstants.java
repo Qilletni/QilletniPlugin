@@ -1,9 +1,7 @@
 package dev.qilletni.intellij.index;
 
 /**
- * Minimal index constants and helpers for Plan 02B (scaffolding only).
- * No indices are registered yet; these constants provide stable names/versions
- * and helpers for composing composite keys.
+ * Names and versions of the stub indexes, and helpers for composing their keys.
  */
 public final class QilletniIndexConstants {
     private QilletniIndexConstants() {}
@@ -13,10 +11,13 @@ public final class QilletniIndexConstants {
     public static final String FUNCTION_INDEX_NAME = "qilletni.function"; // top-level only
     public static final String EXT_METHOD_INDEX_NAME = "qilletni.extMethod"; // key: receiver#name
 
+    /** Version of the stub tree; bump when stub contents or serialization change. */
+    public static final int STUB_VERSION = 2;
+
     // Versions (bump when serialization/keying changes)
     public static final int ENTITY_INDEX_VERSION = 1;
     public static final int FUNCTION_INDEX_VERSION = 1;
-    public static final int EXT_METHOD_INDEX_VERSION = 3;
+    public static final int EXT_METHOD_INDEX_VERSION = 4;
 
     /**
      * Compose a composite key for extension methods in the form "Receiver#name".

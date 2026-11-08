@@ -2,37 +2,30 @@ package dev.qilletni.intellij.project;
 
 import com.intellij.openapi.fileEditor.FileEditorManager;
 import com.intellij.openapi.project.Project;
-import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
+import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-import java.io.File;
-
+/** Opens the starter file of a newly created Qilletni project. */
 public final class QilletniPostInitOpener {
     private QilletniPostInitOpener() {}
 
-    public static void openPrimaryFile(@Nullable VirtualFile baseDir) {
-        if (baseDir == null) return;
-        Project project = com.intellij.openapi.project.ProjectManager.getInstance().getOpenProjects().length > 0
-                ? com.intellij.openapi.project.ProjectManager.getInstance().getOpenProjects()[0] : null;
-        if (project == null) return;
-
-        // Try README.md
-        var readme = baseDir.findChild("README.md");
-        if (readme != null) { FileEditorManager.getInstance(project).openFile(readme, true); return; }
-        // Try qilletni_info.yml in qilletni-src
-        var src = baseDir.findChild("qilletni-src");
-        if (src != null) {
-            var info = src.findChild("qilletni_info.yml");
-            if (info != null) { FileEditorManager.getInstance(project).openFile(info, true); return; }
-            // else open the first .ql file if any
-            for (var child : src.getChildren()) {
+    public static void openPrimaryFile(@NotNull Project project, @Nullable VirtualFile baseDir, QilletniNewProjectWizardStep.ProjectType type) {
+        if (baseDir == null || project.isDisposed()) return;
+        var editors = FileEditorManager.getInstance(project);
+        // Libraries are tried out through their example; applications start in qilletni-src
+        var dirs = type == QilletniNewProjectWizardStep.ProjectType.LIBRARY ? new String[]{"examples", "qilletni-src"} : new String[]{"qilletni-src"};
+        for (var dirName : dirs) {
+            var dir = baseDir.findChild(dirName);
+            if (dir == null) continue;
+            for (var child : dir.getChildren()) {
                 if (!child.isDirectory() && child.getName().endsWith(".ql")) {
-                    FileEditorManager.getInstance(project).openFile(child, true); return;
+                    editors.openFile(child, true);
+                    return;
                 }
             }
         }
-        // Fallback: open the base directory in Project View implicitly by focusing it
-        // No-op if nothing specific to open
+        var readme = baseDir.findChild("README.md");
+        if (readme != null) editors.openFile(readme, true);
     }
 }

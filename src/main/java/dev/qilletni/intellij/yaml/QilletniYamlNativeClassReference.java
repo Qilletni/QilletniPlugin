@@ -1,18 +1,15 @@
 package dev.qilletni.intellij.yaml;
 
+import com.intellij.openapi.util.TextRange;
 import com.intellij.openapi.project.DumbService;
-import com.intellij.openapi.project.Project;
 import com.intellij.openapi.roots.ProjectFileIndex;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.psi.JavaPsiFacade;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiElement;
-import com.intellij.psi.PsiElementFactory;
 import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiReferenceBase;
-import com.intellij.psi.ResolveResult;
 import com.intellij.psi.search.GlobalSearchScope;
-import com.intellij.util.IncorrectOperationException;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.yaml.psi.YAMLScalar;
@@ -21,7 +18,7 @@ import org.jetbrains.yaml.psi.YAMLScalar;
 public class QilletniYamlNativeClassReference extends PsiReferenceBase<YAMLScalar> {
     public QilletniYamlNativeClassReference(@NotNull YAMLScalar element) {
         // Anchor the reference to the entire scalar text within the element (relative range)
-        super(element, new com.intellij.openapi.util.TextRange(0, element.getTextLength()));
+        super(element, new TextRange(0, element.getTextLength()));
     }
 
     @Override

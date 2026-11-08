@@ -13,14 +13,13 @@ import com.intellij.psi.tree.IFileElementType;
 import com.intellij.psi.tree.TokenSet;
 import dev.qilletni.intellij.parser.QilletniParser;
 import dev.qilletni.intellij.psi.QilletniTypes;
+import dev.qilletni.intellij.psi.stubs.QilletniFileElementType;
 import org.jetbrains.annotations.NotNull;
 
 /**
  * ParserDefinition for Qilletni language wiring generated lexer/parser and PSI.
  */
 public final class QilletniParserDefinition implements ParserDefinition {
-    private static final IFileElementType FILE = new IFileElementType(QilletniLanguage.INSTANCE);
-
     private static final TokenSet WHITE_SPACES = TokenSet.create(TokenType.WHITE_SPACE);
     private static final TokenSet COMMENTS = TokenSet.create(
             QilletniTypes.DOC_COMMENT,
@@ -41,7 +40,7 @@ public final class QilletniParserDefinition implements ParserDefinition {
 
     @Override
     public @NotNull IFileElementType getFileNodeType() {
-        return FILE;
+        return QilletniFileElementType.INSTANCE;
     }
 
     @Override

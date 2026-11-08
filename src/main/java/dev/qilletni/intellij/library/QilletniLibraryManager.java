@@ -1,316 +1,262 @@
 package dev.qilletni.intellij.library;
 
 import com.google.gson.Gson;
-import com.google.gson.JsonSyntaxException;
-import com.intellij.notification.Notification;
-import com.intellij.notification.NotificationType;
-import com.intellij.notification.Notifications;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParseException;
+import com.google.gson.JsonParser;
+import com.google.gson.JsonPrimitive;
 import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.application.PathManager;
 import com.intellij.openapi.components.Service;
-import com.intellij.openapi.progress.ProcessCanceledException;
-import com.intellij.openapi.project.ProjectManager;
+import com.intellij.openapi.diagnostic.Logger;
+import com.intellij.openapi.util.io.NioFiles;
 import com.intellij.openapi.vfs.JarFileSystem;
-import com.intellij.openapi.vfs.VfsUtilCore;
+import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.openapi.vfs.VirtualFileManager;
-import com.intellij.util.concurrency.AppExecutorUtil;
 import dev.qilletni.intellij.library.model.InstalledQllLibrary;
 import dev.qilletni.intellij.library.model.QllInfo;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.*;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.stream.Collectors;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.jar.JarOutputStream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 
 /**
- * Application-level manager that discovers .qll archives and exposes their sources and metadata.
+ * Application-level cache of .qll archives. Loading an archive reads its {@code qll.info}, extracts
+ * {@code qilletni-src/**} into the IDE system directory and puts the native classes in a {@code native.jar} next to it,
+ * so both can be used as library roots. Current archives store the classes under {@code native/}; older ones contain
+ * a {@code native.jar}.
+ * <p>
+ * Which archives a project uses is decided by {@link QilletniProjectDependencies}; this class only loads them.
  */
 @Service
 public final class QilletniLibraryManager {
+    private static final Logger LOG = Logger.getInstance(QilletniLibraryManager.class);
+    private static final String SRC_PREFIX = "qilletni-src/";
+    private static final String NATIVE_PREFIX = "native/";
+    private static final String NATIVE_JAR = "native.jar";
+    /** Bump when the extraction layout changes, so caches written by older versions are extracted again. */
+    private static final int CACHE_FORMAT = 2;
 
-    public record LibraryConflict(String name, List<Path> archives) {}
-    public record LibraryLoadError(Path archive, String message) {}
+    /** Result of loading an archive: either a library or an error message. */
+    public record LoadResult(@Nullable InstalledQllLibrary library, @Nullable String error) {
+        static LoadResult error(String message) { return new LoadResult(null, message); }
+    }
 
-    private static final String NOTIFICATION_GROUP = "Qilletni Libraries";
+    private record CacheKey(Path archive, long modified, long size) {}
 
-    private final AtomicReference<Snapshot> snapshot = new AtomicReference<>(new Snapshot(List.of(), List.of(), List.of(), System.currentTimeMillis()));
     private final Gson gson = new Gson();
-
-    private record Snapshot(List<InstalledQllLibrary> installed,
-                            List<LibraryConflict> conflicts,
-                            List<LibraryLoadError> errors,
-                            long updatedAt) {}
-
-    /** Snapshot last update time in millis. */
-    public long getLastUpdatedAt() { return snapshot.get().updatedAt; }
+    private final Map<CacheKey, LoadResult> loaded = new ConcurrentHashMap<>();
 
     public static QilletniLibraryManager getInstance() {
         return ApplicationManager.getApplication().getService(QilletniLibraryManager.class);
     }
 
-    /** Returns current successfully installed libraries (conflict-free). */
-    public List<InstalledQllLibrary> getInstalled() {
-        return snapshot.get().installed;
+    /** Root directory of extracted archives. */
+    public static @NotNull Path cacheRoot() {
+        return Path.of(PathManager.getSystemPath(), "qilletni-libs");
     }
 
-    public List<LibraryConflict> getConflicts() { return snapshot.get().conflicts; }
-    public List<LibraryLoadError> getErrors() { return snapshot.get().errors; }
-
-    /** Returns resolved VirtualFiles for all auto-import entries across installed libraries. */
-    public List<VirtualFile> getAllAutoImportFiles() {
-        var out = new LinkedHashSet<VirtualFile>();
-        for (var lib : snapshot.get().installed) {
-            var root = lib.srcRoot();
-            if (root == null) continue;
-            var list = lib.autoImportFiles();
-            if (list == null) continue;
-            for (var rel : list) {
-                if (rel == null || rel.isBlank()) continue;
-                var vf = VfsUtilCore.findRelativeFile(rel.startsWith("/") ? rel.substring(1) : rel, root);
-                if (vf != null) out.add(vf);
-            }
-        }
-        return new ArrayList<>(out);
-    }
-
-    /** Triggers a rescan of the libraries root (runs on pooled thread). */
-    public void rescan() {
-        AppExecutorUtil.getAppExecutorService().execute(this::doScan);
-    }
-
-    private void doScan() {
-        var settings = QilletniLibrariesSettings.getInstance();
-        var rootPathStr = settings != null ? settings.getLibrariesRootPath() : "";
-        if (rootPathStr == null || rootPathStr.isBlank()) {
-            snapshot.set(new Snapshot(List.of(), List.of(), List.of(), System.currentTimeMillis()));
-            return;
-        }
-        Path root = Path.of(rootPathStr);
-        if (!Files.isDirectory(root)) {
-            snapshot.set(new Snapshot(List.of(), List.of(), List.of(new LibraryLoadError(root, "Libraries root is not a directory")), System.currentTimeMillis()));
-            notify("Qilletni libraries root is invalid: " + root, NotificationType.WARNING);
-            return;
-        }
-
-        // Ensure VFS up-to-date before reading JAR contents
-        VirtualFileManager.getInstance().asyncRefresh(null);
-
-        List<ScanItem> scanned = new ArrayList<>();
+    /**
+     * Loads the given archive, extracting it if it changed since the last load. Performs IO and VFS refreshes,
+     * so call it from a background thread without holding a read action.
+     */
+    public @NotNull LoadResult load(@NotNull Path archive) {
+        BasicFileAttributes attrs;
         try {
-            try (var paths = Files.walk(root)) {
-                paths.filter(p -> Files.isRegularFile(p) && p.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".qll"))
-                        .forEach(p -> {
-                            var item = scanArchive(p);
-                            if (item != null) {
-                                scanned.add(item);
-                            }
-                        });
-            }
-        } catch (IOException ignored) {}
-
-        // Group by name and resolve conflicts
-        Map<String, List<ScanItem>> byName = scanned.stream()
-                .filter(Objects::nonNull)
-                .filter(s -> s.installed != null && s.name != null && !s.name.isBlank())
-                .collect(Collectors.groupingBy(s -> s.name));
-        List<InstalledQllLibrary> installed = new ArrayList<>();
-        List<LibraryConflict> conflicts = new ArrayList<>();
-        for (var e : byName.entrySet()) {
-            var name = e.getKey();
-            var items = e.getValue();
-            if (items.size() > 1) {
-                conflicts.add(new LibraryConflict(name, items.stream().map(s -> s.archive).toList()));
-                continue; // exclude all conflicting entries
-            }
-            var only = items.getFirst();
-            installed.add(only.installed());
+            attrs = Files.readAttributes(archive, BasicFileAttributes.class);
+        } catch (IOException e) {
+            return LoadResult.error("Archive not found: " + archive);
         }
+        var key = new CacheKey(archive.toAbsolutePath().normalize(), attrs.lastModifiedTime().toMillis(), attrs.size());
+        var cached = loaded.get(key);
+        if (cached != null && (cached.library() == null || isValid(cached.library()))) return cached;
 
-        List<LibraryLoadError> errors = scanned.stream().flatMap(s -> s.errors.stream()).toList();
-        snapshot.set(new Snapshot(List.copyOf(installed), List.copyOf(conflicts), List.copyOf(errors), System.currentTimeMillis()));
-
-        if (!conflicts.isEmpty()) {
-            var names = conflicts.stream().map(LibraryConflict::name)
-                    .filter(n -> n != null && !n.isBlank() && !"<unknown>".equals(n))
-                    .collect(Collectors.toList());
-            if (!names.isEmpty()) {
-                notify("Qilletni library name conflicts detected: " + String.join(", ", names), NotificationType.ERROR);
-            } else {
-                notify("Qilletni library name conflicts detected.", NotificationType.ERROR);
-            }
-        }
-
-        // Update External Libraries presentation in all open projects (debounced on EDT)
-        try {
-            dev.qilletni.intellij.library.QilletniProjectLibraries.requestSyncAllOpenProjects();
-        } catch (Throwable t) {
-            t.printStackTrace();
-        }
-
-        // Notify project-level components (e.g., AdditionalLibraryRootsProvider consumers) by refreshing VFS
-        VirtualFileManager.getInstance().asyncRefresh(null);
+        var result = doLoad(key);
+        loaded.keySet().removeIf(k -> k.archive().equals(key.archive()));
+        loaded.put(key, result);
+        return result;
     }
 
-    private void notify(String content, NotificationType type) {
-        var n = new Notification(NOTIFICATION_GROUP, "Qilletni Libraries", content, type);
-        Notifications.Bus.notify(n, ProjectManager.getInstance().getDefaultProject());
-    }
-
-    private record ScanItem(String name, Path archive, InstalledQllLibrary installed, List<LibraryLoadError> errors) {}
-
-    private ScanItem scanArchive(Path archivePath) {
-        List<LibraryLoadError> errors = new ArrayList<>();
-        try {
-            if (!Files.isRegularFile(archivePath)) {
-                errors.add(new LibraryLoadError(archivePath, "Archive not found"));
-                return new ScanItem("<unknown>", archivePath, null, errors);
-            }
-
-            // Read qll.info directly from ZIP (no VFS mount)
-            QllInfo info;
-            try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(archivePath.toFile())) {
-                var infoEntry = zip.getEntry("qll.info");
-                if (infoEntry == null) {
-                    errors.add(new LibraryLoadError(archivePath, "Missing qll.info"));
-                    return new ScanItem("<unknown>", archivePath, null, errors);
-                }
-                try (var in = zip.getInputStream(infoEntry); var reader = new InputStreamReader(in, StandardCharsets.UTF_8)) {
-                    info = gson.fromJson(reader, QllInfo.class);
-                }
-                if (info == null || info.name() == null || info.name().isBlank()) {
-                    errors.add(new LibraryLoadError(archivePath, "qll.info missing name"));
-                    return new ScanItem("<unknown>", archivePath, null, errors);
-                }
-
-                // Ensure a persistent extraction cache exists and is up-to-date; extract only qilletni-src/**
-                var cacheRoot = cacheDirFor(archivePath);
-                var srcDir = ensureExtractedQilletniSrc(zip, archivePath, cacheRoot, errors);
-                com.intellij.openapi.vfs.VirtualFile srcRootVf = null;
-                if (srcDir != null) {
-                    srcRootVf = com.intellij.openapi.vfs.LocalFileSystem.getInstance().refreshAndFindFileByNioFile(srcDir);
-                }
-
-                // Ensure native.jar is available as a proper jar root by extracting it to cache and mounting it
-                com.intellij.openapi.vfs.VirtualFile nativeJarRootVf = null;
-                try {
-                    var nativeJarEntry = zip.getEntry("native.jar");
-                    if (nativeJarEntry != null && !nativeJarEntry.isDirectory()) {
-                        var outJar = cacheRoot.resolve("native.jar");
-                        // Write/overwrite cached jar (small file; can optimize later if needed)
-                        try (var in = zip.getInputStream(nativeJarEntry); var os = java.nio.file.Files.newOutputStream(outJar)) {
-                            in.transferTo(os);
-                        }
-                        var url = "jar://" + outJar.toAbsolutePath().toString().replace('\\', '/') + "!/";
-                        nativeJarRootVf = com.intellij.openapi.vfs.VirtualFileManager.getInstance().refreshAndFindFileByUrl(url);
-                        if (nativeJarRootVf != null) {
-                            var children = nativeJarRootVf.getChildren();
-                        }
-                    }
-                } catch (Throwable t) {
-                    t.printStackTrace();
-                }
-
-                var installed = new InstalledQllLibrary(
-                        info.name(),
-                        info.version(),
-                        info.author(),
-                        info.description(),
-                        archivePath,
-                        srcRootVf,
-                        nativeJarRootVf,
-                        info.nativeClasses() == null ? List.of() : List.copyOf(info.nativeClasses()),
-                        info.autoImportFiles() == null ? List.of() : List.copyOf(info.autoImportFiles())
-                );
-                return new ScanItem(info.name(), archivePath, installed, errors);
-            } catch (JsonSyntaxException ex) {
-                errors.add(new LibraryLoadError(archivePath, "Invalid qll.info: " + ex.getMessage()));
-                return new ScanItem("<unknown>", archivePath, null, errors);
-            }
-        } catch (Throwable t) {
-            errors.add(new LibraryLoadError(archivePath, "Failed to scan: " + t.getMessage()));
-            return new ScanItem("<unknown>", archivePath, null, errors);
-        }
-    }
-
-    /** Compute stable cache dir under IDE system path for an archive (path+mtime+size hash). */
-    private static Path cacheDirFor(Path archivePath) throws IOException {
-        var sys = com.intellij.openapi.application.PathManager.getSystemPath();
-        var attrs = java.nio.file.Files.readAttributes(archivePath, java.nio.file.attribute.BasicFileAttributes.class);
-        var key = archivePath.toAbsolutePath().toString() + "|" + attrs.lastModifiedTime().toMillis() + "|" + attrs.size();
-        var digest = sha256Hex(key);
-        var dir = Path.of(sys, "qilletni-libs", digest);
-        java.nio.file.Files.createDirectories(dir);
-        return dir;
-    }
-
-    private static String sha256Hex(String s) {
-        try {
-            var md = java.security.MessageDigest.getInstance("SHA-256");
-            var bytes = md.digest(s.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            var sb = new StringBuilder(bytes.length * 2);
-            for (byte b : bytes) sb.append(String.format("%02x", b));
-            return sb.toString();
-        } catch (Exception e) {
-            // Fallback: simple hash
-            return Integer.toHexString(s.hashCode());
-        }
-    }
-
-    /** Extracts qilletni-src/** from the given zip into cacheRoot; returns the extracted qilletni-src dir path or null. */
-    private static Path ensureExtractedQilletniSrc(java.util.zip.ZipFile zip, Path archivePath, Path cacheRoot, List<LibraryLoadError> errors) {
-        try {
-            var meta = cacheRoot.resolve(".qll.meta");
-            var attrs = java.nio.file.Files.readAttributes(archivePath, java.nio.file.attribute.BasicFileAttributes.class);
-            var stamp = attrs.lastModifiedTime().toMillis() + ":" + attrs.size();
-            boolean upToDate = java.nio.file.Files.isRegularFile(meta) && java.nio.file.Files.readString(meta).equals(stamp);
-            var outSrc = cacheRoot.resolve("qilletni-src");
-            if (!upToDate) {
-                // Clean old cache
-                if (java.nio.file.Files.exists(outSrc)) {
-                    deleteRecursively(outSrc);
-                }
-                java.nio.file.Files.createDirectories(outSrc);
-                // Extract entries under qilletni-src/
-                var enumEntries = zip.entries();
-                while (enumEntries.hasMoreElements()) {
-                    var e = enumEntries.nextElement();
-                    String name = e.getName();
-                    if (!name.startsWith("qilletni-src/")) continue;
-                    var rel = name.substring("qilletni-src/".length());
-                    var target = outSrc.resolve(rel);
-                    if (e.isDirectory()) {
-                        java.nio.file.Files.createDirectories(target);
-                    } else {
-                        java.nio.file.Files.createDirectories(target.getParent());
-                        try (var in = zip.getInputStream(e); var out = java.nio.file.Files.newOutputStream(target)) {
-                            in.transferTo(out);
-                        }
-                    }
-                }
-                java.nio.file.Files.writeString(meta, stamp);
-            }
-            return java.nio.file.Files.exists(outSrc) ? outSrc : null;
-        } catch (IOException io) {
-            errors.add(new LibraryLoadError(archivePath, "Extraction failed: " + io.getMessage()));
+    /** Reads only the {@code qll.info} of an archive. */
+    public @Nullable QllInfo readInfo(@NotNull Path archive) {
+        try (var zip = new ZipFile(archive.toFile())) {
+            return readInfo(zip);
+        } catch (IOException | JsonParseException e) {
             return null;
         }
     }
 
-    private static void deleteRecursively(Path p) throws IOException {
-        if (!java.nio.file.Files.exists(p)) return;
-        try (var walk = java.nio.file.Files.walk(p)) {
-            walk.sorted(java.util.Comparator.reverseOrder()).forEach(path -> {
-                try { java.nio.file.Files.deleteIfExists(path); } catch (IOException ignored) {}
-            });
+    /** Forgets every loaded archive and deletes the extraction cache. */
+    public void clearCache() throws IOException {
+        loaded.clear();
+        NioFiles.deleteRecursively(cacheRoot());
+        VirtualFileManager.getInstance().asyncRefresh(null);
+    }
+
+    private static boolean isValid(InstalledQllLibrary lib) {
+        return (lib.srcRoot() == null || lib.srcRoot().isValid())
+                && (lib.nativeJarRoot() == null || lib.nativeJarRoot().isValid());
+    }
+
+    private LoadResult doLoad(CacheKey key) {
+        var archive = key.archive();
+        try (var zip = new ZipFile(archive.toFile())) {
+            QllInfo info;
+            try {
+                info = readInfo(zip);
+            } catch (JsonParseException e) {
+                return LoadResult.error("Invalid qll.info in " + archive.getFileName() + ": " + e.getMessage());
+            }
+            if (info == null) return LoadResult.error("Missing qll.info in " + archive.getFileName());
+            if (info.name() == null || info.name().isBlank()) return LoadResult.error("qll.info in " + archive.getFileName() + " has no name");
+
+            var cacheDir = cacheDirFor(archive);
+            var stamp = CACHE_FORMAT + ":" + key.modified() + ":" + key.size();
+            var stampFile = cacheDir.resolve(".qll.meta");
+            boolean upToDate = Files.isRegularFile(stampFile) && Files.readString(stampFile).equals(stamp);
+            if (!upToDate) {
+                NioFiles.deleteRecursively(cacheDir);
+                Files.createDirectories(cacheDir);
+                extract(zip, cacheDir);
+                Files.writeString(stampFile, stamp);
+            }
+
+            var srcDir = cacheDir.resolve("qilletni-src");
+            VirtualFile srcRoot = Files.isDirectory(srcDir) ? LocalFileSystem.getInstance().refreshAndFindFileByNioFile(srcDir) : null;
+            VirtualFile nativeJarRoot = null;
+            var nativeJar = cacheDir.resolve(NATIVE_JAR);
+            var localJar = Files.isRegularFile(nativeJar) ? LocalFileSystem.getInstance().refreshAndFindFileByNioFile(nativeJar) : null;
+            if (localJar != null) {
+                nativeJarRoot = JarFileSystem.getInstance().getJarRootForLocalFile(localJar);
+                // A re-extracted jar replaces one at the same path; drop what the jar file system remembers of it
+                if (nativeJarRoot != null && !upToDate) nativeJarRoot.refresh(false, true);
+            }
+
+            return new LoadResult(new InstalledQllLibrary(
+                    info.scope(),
+                    info.name(),
+                    info.version(),
+                    info.author(),
+                    info.description(),
+                    archive,
+                    srcRoot,
+                    nativeJarRoot,
+                    info.nativeClasses() == null ? List.of() : List.copyOf(info.nativeClasses()),
+                    info.autoImportFiles() == null ? List.of() : List.copyOf(info.autoImportFiles())
+            ), null);
+        } catch (IOException e) {
+            LOG.warn("Failed to load Qilletni library " + archive, e);
+            return LoadResult.error("Failed to read " + archive.getFileName() + ": " + e.getMessage());
         }
     }
 
-    // Future: support unzipped library folders (containing qll.info and qilletni-src) alongside .qll archives.
-    // This can be implemented by checking Files.isDirectory and reading files directly via LocalFileSystem.
+    private @Nullable QllInfo readInfo(ZipFile zip) throws IOException {
+        var entry = zip.getEntry("qll.info");
+        if (entry == null) return null;
+        try (var reader = new InputStreamReader(zip.getInputStream(entry), StandardCharsets.UTF_8)) {
+            var json = JsonParser.parseReader(reader);
+            if (!json.isJsonObject()) throw new JsonParseException("qll.info is not a JSON object");
+            var obj = json.getAsJsonObject();
+            normalizeVersion(obj);
+            if (obj.get("dependencies") != null && obj.get("dependencies").isJsonArray()) {
+                for (var dep : obj.getAsJsonArray("dependencies")) {
+                    if (dep.isJsonObject()) normalizeVersion(dep.getAsJsonObject());
+                }
+            }
+            return gson.fromJson(obj, QllInfo.class);
+        }
+    }
+
+    /** Older archives wrote versions as {@code {"major":1,"minor":0,"patch":0}}; newer ones as {@code "1.0.0"}. */
+    private static void normalizeVersion(JsonObject obj) {
+        JsonElement version = obj.get("version");
+        if (version != null && version.isJsonObject()) {
+            var v = version.getAsJsonObject();
+            obj.add("version", new JsonPrimitive(intOf(v, "major") + "." + intOf(v, "minor") + "." + intOf(v, "patch")));
+        }
+    }
+
+    private static int intOf(JsonObject obj, String key) {
+        var e = obj.get(key);
+        return e != null && e.isJsonPrimitive() ? e.getAsInt() : 0;
+    }
+
+    /** Directory the given archive is extracted into. */
+    static @NotNull Path cacheDirFor(@NotNull Path archive) {
+        return cacheRoot().resolve(sha256(archive.toAbsolutePath().normalize().toString()));
+    }
+
+    /**
+     * Extracts {@code qilletni-src/**} and {@code native.jar}, refusing entries that would escape {@code target}.
+     * Archives without a {@code native.jar} get one packed from their {@code native/**} entries.
+     */
+    private static void extract(ZipFile zip, Path target) throws IOException {
+        var root = target.toAbsolutePath().normalize();
+        if (zip.getEntry(NATIVE_JAR) == null) repackNativeDir(zip, root.resolve(NATIVE_JAR));
+        var entries = zip.entries();
+        while (entries.hasMoreElements()) {
+            var entry = entries.nextElement();
+            var name = entry.getName();
+            if (!name.startsWith(SRC_PREFIX) && !name.equals(NATIVE_JAR)) continue;
+
+            var out = root.resolve(name).normalize();
+            if (!out.startsWith(root)) {
+                LOG.warn("Skipping archive entry outside extraction directory: " + name);
+                continue;
+            }
+            if (entry.isDirectory()) {
+                Files.createDirectories(out);
+            } else {
+                Files.createDirectories(out.getParent());
+                try (var in = zip.getInputStream(entry)) {
+                    Files.copy(in, out);
+                }
+            }
+        }
+    }
+
+    /** Writes the archive's {@code native/**} entries, without that prefix, to a jar. Writes nothing if there are none. */
+    private static void repackNativeDir(ZipFile zip, Path out) throws IOException {
+        var nativeEntries = zip.stream()
+                .filter(e -> e.getName().startsWith(NATIVE_PREFIX) && e.getName().length() > NATIVE_PREFIX.length())
+                .toList();
+        if (nativeEntries.isEmpty()) return;
+
+        try (var jar = new JarOutputStream(Files.newOutputStream(out))) {
+            for (var entry : nativeEntries) {
+                jar.putNextEntry(new ZipEntry(entry.getName().substring(NATIVE_PREFIX.length())));
+                if (!entry.isDirectory()) {
+                    try (var in = zip.getInputStream(entry)) {
+                        in.transferTo(jar);
+                    }
+                }
+                jar.closeEntry();
+            }
+        }
+    }
+
+    private static String sha256(String s) {
+        try {
+            var digest = MessageDigest.getInstance("SHA-256").digest(s.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(digest);
+        } catch (NoSuchAlgorithmException e) {
+            return Integer.toHexString(s.hashCode());
+        }
+    }
 }

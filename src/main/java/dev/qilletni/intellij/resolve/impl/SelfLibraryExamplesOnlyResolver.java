@@ -5,13 +5,14 @@ import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VfsUtilCore;
 import com.intellij.openapi.vfs.VirtualFile;
 import dev.qilletni.intellij.library.QilletniYamlInfoUtil;
+import dev.qilletni.intellij.resolve.QilletniLibraryImportPath;
 import dev.qilletni.intellij.resolve.QilletniLibraryPathResolver;
 
 import java.io.File;
-import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Set;
+
+import static dev.qilletni.intellij.util.QilletniConstants.EXAMPLES;
+import static dev.qilletni.intellij.util.QilletniConstants.QILLETNI_SRC;
 
 /**
  * Resolves library imports that target the current project as a library, but only when the importing
@@ -25,9 +26,7 @@ import java.util.Set;
 public final class SelfLibraryExamplesOnlyResolver implements QilletniLibraryPathResolver {
     @Override
     public boolean supports(String rawImportPath) {
-        if (rawImportPath == null) return false;
-        int colon = rawImportPath.indexOf(':');
-        return colon > 0 && colon < rawImportPath.length() - 1;
+        return QilletniLibraryImportPath.parse(rawImportPath) != null;
     }
 
     @Override
@@ -36,66 +35,38 @@ public final class SelfLibraryExamplesOnlyResolver implements QilletniLibraryPat
         // Only allow when context is under <project>/examples
         VirtualFile projectRoot = findProjectRoot(project);
         if (projectRoot == null) return List.of();
-        var examples = projectRoot.findChild("examples");
+        var examples = projectRoot.findChild(EXAMPLES);
         if (examples == null || !examples.isDirectory()) return List.of();
-        if (!VfsUtilCore.isAncestor(examples, contextFile, true)) {
-            return List.of();
-        }
+        if (!VfsUtilCore.isAncestor(examples, contextFile, true)) return List.of();
 
-        int colon = rawImportPath.indexOf(':');
-        if (colon <= 0 || colon >= rawImportPath.length() - 1) return List.of();
-        String libName = rawImportPath.substring(0, colon).trim();
-        String relPath = rawImportPath.substring(colon + 1).trim();
-        if (relPath.startsWith("/")) relPath = relPath.substring(1);
-        if (libName.isEmpty() || relPath.isEmpty()) return List.of();
+        var importPath = QilletniLibraryImportPath.parse(rawImportPath);
+        if (importPath == null) return List.of();
+        String relPath = importPath.relativePath();
 
         // Disallow relative pathing beyond root
         if (relPath.startsWith("./") || relPath.contains("/./") || relPath.contains("..")) return List.of();
 
-        // Resolve qilletni-src root and validate library name from YAML
-        var qlSrc = projectRoot.findChild("qilletni-src");
+        // Resolve qilletni-src root and validate library name from the manifest
+        var qlSrc = projectRoot.findChild(QILLETNI_SRC);
         if (qlSrc == null || !qlSrc.isDirectory()) return List.of();
 
-        String yamlName = readLibraryNameFromYaml(project, qlSrc);
-        if (yamlName == null || yamlName.isBlank()) return List.of();
-        if (!yamlName.equalsIgnoreCase(libName)) return List.of();
+        var manifest = QilletniYamlInfoUtil.readManifest(qlSrc);
+        String yamlName = manifest != null ? manifest.simpleName() : null;
+        if (yamlName == null || !yamlName.equalsIgnoreCase(importPath.libraryName())) return List.of();
 
         var target = VfsUtilCore.findRelativeFile(relPath, qlSrc);
         if (target == null || !target.exists() || target.isDirectory()) return List.of();
 
         // Basic symlink guard: if canonical path differs (and is known), skip
-        try {
-            String canonical = target.getCanonicalPath();
-            if (canonical != null && !canonical.equals(target.getPath())) return List.of();
-        } catch (Throwable ignored) {
-        }
+        String canonical = target.getCanonicalPath();
+        if (canonical != null && !canonical.equals(target.getPath())) return List.of();
 
-        Set<VirtualFile> out = new LinkedHashSet<>();
-        out.add(target);
-        return new ArrayList<>(out);
+        return List.of(target);
     }
 
     private static VirtualFile findProjectRoot(Project project) {
         String basePath = project.getBasePath();
         if (basePath == null) return null;
-        File io = new File(basePath);
-        return LocalFileSystem.getInstance().findFileByIoFile(io);
-    }
-
-    private static String readLibraryNameFromYaml(Project project, VirtualFile qilletniSrcRoot) {
-        // Use existing util to load the map via SnakeYAML with minimal duplication
-        // We don't have a direct API for name; re-read similar to util's pattern
-        var yaml = VfsUtilCore.findRelativeFile("qilletni_info.yml", qilletniSrcRoot);
-        if (yaml == null || !yaml.isValid()) return null;
-        try (var is = yaml.getInputStream(); var reader = new java.io.InputStreamReader(is, java.nio.charset.StandardCharsets.UTF_8)) {
-            var yamlLoader = new org.yaml.snakeyaml.Yaml();
-            Object data = yamlLoader.load(reader);
-            if (data instanceof java.util.Map<?, ?> map) {
-                Object name = map.get("name");
-                if (name instanceof String s && !s.isBlank()) return s.trim();
-            }
-        } catch (Throwable ignored) {
-        }
-        return null;
+        return LocalFileSystem.getInstance().findFileByIoFile(new File(basePath));
     }
 }

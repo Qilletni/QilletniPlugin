@@ -20,8 +20,6 @@ public class MarkdownParser {
     private final Parser parser;
     private final HtmlRenderer renderer;
 
-    private static MarkdownParser instance;
-
     public MarkdownParser(Parser parser, HtmlRenderer renderer) {
         this.parser = parser;
         this.renderer = renderer;
@@ -50,11 +48,12 @@ public class MarkdownParser {
         return JAVA_DOC_BASE_URL + path;
     }
 
+    private static final class Holder {
+        static final MarkdownParser INSTANCE = createMarkdownParser();
+    }
+
     public static MarkdownParser getInstance() {
-        if (instance == null) {
-            instance = createMarkdownParser();
-        }
-        return instance;
+        return Holder.INSTANCE;
     }
 
     private static MarkdownParser createMarkdownParser() {

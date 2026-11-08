@@ -95,8 +95,10 @@ double_expr ::= DOUBLE | DOUBLE_TYPE LEFT_PAREN expr RIGHT_PAREN
 
 str_expr ::= STRING | STRING_TYPE LEFT_PAREN expr RIGHT_PAREN
 
-collection_expr ::= collection_url_or_name_pair order_define? weights_define?
-                  | COLLECTION_TYPE LEFT_PAREN list_expression RIGHT_PAREN order_define? weights_define?
+collection_expr ::= collection_url_or_name_pair order_settings
+                  | COLLECTION_TYPE LEFT_PAREN (list_expression | ID) RIGHT_PAREN order_settings
+
+order_settings ::= order_define? weights_define?
 
 order_define ::= ORDER_PARAM LEFT_SBRACKET COLLECTION_ORDER RIGHT_SBRACKET
 
@@ -104,7 +106,7 @@ weights_define ::= WEIGHTS_KEYWORD LEFT_SBRACKET (ID | function_call) RIGHT_SBRA
 
 song_expr ::= song_url_or_name_pair
 
-album_expr ::= album_url_or_name_pair
+album_expr ::= album_url_or_name_pair order_settings
 
 song_url_or_name_pair ::= STRING (SONG_TYPE)? BY STRING
 
@@ -178,7 +180,7 @@ elseif_list ::= ELSE_KEYWORD IF_KEYWORD LEFT_PAREN expr RIGHT_PAREN LEFT_CBRACKE
 
 for_stmt ::= FOR_KEYWORD LEFT_PAREN for_expr RIGHT_PAREN LEFT_CBRACKET body RIGHT_CBRACKET
 
-for_expr ::= expr | range_expr | foreach_range
+for_expr ::= range_expr | foreach_range | expr
 
 range_expr ::= ID DOUBLE_DOT (expr | RANGE_INFINITY)
 

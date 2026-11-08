@@ -79,13 +79,14 @@ public class QilletniParser implements PsiParser, LightPsiParser {
   }
 
   /* ********************************************************** */
-  // album_url_or_name_pair
+  // album_url_or_name_pair order_settings
   public static boolean album_expr(PsiBuilder b, int l) {
     if (!recursion_guard_(b, l, "album_expr")) return false;
     if (!nextTokenIs(b, STRING)) return false;
     boolean r;
     Marker m = enter_section_(b);
     r = album_url_or_name_pair(b, l + 1);
+    r = r && order_settings(b, l + 1);
     exit_section_(b, m, ALBUM_EXPR, r);
     return r;
   }
@@ -251,8 +252,8 @@ public class QilletniParser implements PsiParser, LightPsiParser {
   }
 
   /* ********************************************************** */
-  // collection_url_or_name_pair order_define? weights_define?
-  //                   | COLLECTION_TYPE LEFT_PAREN list_expression RIGHT_PAREN order_define? weights_define?
+  // collection_url_or_name_pair order_settings
+  //                   | COLLECTION_TYPE LEFT_PAREN (list_expression | ID) RIGHT_PAREN order_settings
   public static boolean collection_expr(PsiBuilder b, int l) {
     if (!recursion_guard_(b, l, "collection_expr")) return false;
     if (!nextTokenIs(b, "<collection expr>", COLLECTION_TYPE, STRING)) return false;
@@ -264,58 +265,37 @@ public class QilletniParser implements PsiParser, LightPsiParser {
     return r;
   }
 
-  // collection_url_or_name_pair order_define? weights_define?
+  // collection_url_or_name_pair order_settings
   private static boolean collection_expr_0(PsiBuilder b, int l) {
     if (!recursion_guard_(b, l, "collection_expr_0")) return false;
     boolean r;
     Marker m = enter_section_(b);
     r = collection_url_or_name_pair(b, l + 1);
-    r = r && collection_expr_0_1(b, l + 1);
-    r = r && collection_expr_0_2(b, l + 1);
+    r = r && order_settings(b, l + 1);
     exit_section_(b, m, null, r);
     return r;
   }
 
-  // order_define?
-  private static boolean collection_expr_0_1(PsiBuilder b, int l) {
-    if (!recursion_guard_(b, l, "collection_expr_0_1")) return false;
-    order_define(b, l + 1);
-    return true;
-  }
-
-  // weights_define?
-  private static boolean collection_expr_0_2(PsiBuilder b, int l) {
-    if (!recursion_guard_(b, l, "collection_expr_0_2")) return false;
-    weights_define(b, l + 1);
-    return true;
-  }
-
-  // COLLECTION_TYPE LEFT_PAREN list_expression RIGHT_PAREN order_define? weights_define?
+  // COLLECTION_TYPE LEFT_PAREN (list_expression | ID) RIGHT_PAREN order_settings
   private static boolean collection_expr_1(PsiBuilder b, int l) {
     if (!recursion_guard_(b, l, "collection_expr_1")) return false;
     boolean r;
     Marker m = enter_section_(b);
     r = consumeTokens(b, 0, COLLECTION_TYPE, LEFT_PAREN);
-    r = r && list_expression(b, l + 1);
+    r = r && collection_expr_1_2(b, l + 1);
     r = r && consumeToken(b, RIGHT_PAREN);
-    r = r && collection_expr_1_4(b, l + 1);
-    r = r && collection_expr_1_5(b, l + 1);
+    r = r && order_settings(b, l + 1);
     exit_section_(b, m, null, r);
     return r;
   }
 
-  // order_define?
-  private static boolean collection_expr_1_4(PsiBuilder b, int l) {
-    if (!recursion_guard_(b, l, "collection_expr_1_4")) return false;
-    order_define(b, l + 1);
-    return true;
-  }
-
-  // weights_define?
-  private static boolean collection_expr_1_5(PsiBuilder b, int l) {
-    if (!recursion_guard_(b, l, "collection_expr_1_5")) return false;
-    weights_define(b, l + 1);
-    return true;
+  // list_expression | ID
+  private static boolean collection_expr_1_2(PsiBuilder b, int l) {
+    if (!recursion_guard_(b, l, "collection_expr_1_2")) return false;
+    boolean r;
+    r = list_expression(b, l + 1);
+    if (!r) r = consumeToken(b, ID);
+    return r;
   }
 
   /* ********************************************************** */
@@ -1371,6 +1351,32 @@ public class QilletniParser implements PsiParser, LightPsiParser {
     r = consumeTokens(b, 0, ORDER_PARAM, LEFT_SBRACKET, COLLECTION_ORDER, RIGHT_SBRACKET);
     exit_section_(b, m, ORDER_DEFINE, r);
     return r;
+  }
+
+  /* ********************************************************** */
+  // order_define? weights_define?
+  public static boolean order_settings(PsiBuilder b, int l) {
+    if (!recursion_guard_(b, l, "order_settings")) return false;
+    boolean r;
+    Marker m = enter_section_(b, l, _NONE_, ORDER_SETTINGS, "<order settings>");
+    r = order_settings_0(b, l + 1);
+    r = r && order_settings_1(b, l + 1);
+    exit_section_(b, l, m, r, false, null);
+    return r;
+  }
+
+  // order_define?
+  private static boolean order_settings_0(PsiBuilder b, int l) {
+    if (!recursion_guard_(b, l, "order_settings_0")) return false;
+    order_define(b, l + 1);
+    return true;
+  }
+
+  // weights_define?
+  private static boolean order_settings_1(PsiBuilder b, int l) {
+    if (!recursion_guard_(b, l, "order_settings_1")) return false;
+    weights_define(b, l + 1);
+    return true;
   }
 
   /* ********************************************************** */

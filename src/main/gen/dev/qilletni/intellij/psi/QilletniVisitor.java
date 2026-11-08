@@ -187,6 +187,10 @@ public class QilletniVisitor extends PsiElementVisitor {
     visitPsiElement(o);
   }
 
+  public void visitOrderSettings(@NotNull QilletniOrderSettings o) {
+    visitPsiElement(o);
+  }
+
   public void visitParamName(@NotNull QilletniParamName o) {
     visitPsiNameIdentifierOwner(o);
   }

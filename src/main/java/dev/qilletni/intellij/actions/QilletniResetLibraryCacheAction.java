@@ -1,47 +1,43 @@
 package dev.qilletni.intellij.actions;
 
-import com.intellij.notification.Notification;
+import com.intellij.notification.NotificationGroupManager;
 import com.intellij.notification.NotificationType;
-import com.intellij.notification.Notifications;
-import com.intellij.openapi.actionSystem.AnAction;
+import com.intellij.openapi.actionSystem.ActionUpdateThread;
 import com.intellij.openapi.actionSystem.AnActionEvent;
-import com.intellij.openapi.application.PathManager;
-import com.intellij.openapi.project.Project;
-import com.intellij.openapi.vfs.VirtualFileManager;
+import com.intellij.openapi.progress.ProgressIndicator;
+import com.intellij.openapi.progress.Task;
+import com.intellij.openapi.project.DumbAwareAction;
 import dev.qilletni.intellij.library.QilletniLibraryManager;
+import dev.qilletni.intellij.library.QilletniProjectDependencies;
 import org.jetbrains.annotations.NotNull;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.Comparator;
+import java.io.IOException;
 
 /**
- * Clears the extracted Qilletni libraries cache (qilletni-libs) and triggers a rescan.
- * Useful for troubleshooting when native.jar or sources appear stale.
- *
- * TODO: Remove this, this is for debugging
+ * Deletes the extracted package cache and re-resolves dependencies. Useful when an installed package was replaced
+ * in place and its sources or native.jar look stale.
  */
-public final class QilletniResetLibraryCacheAction extends AnAction {
+public final class QilletniResetLibraryCacheAction extends DumbAwareAction {
     @Override
     public void actionPerformed(@NotNull AnActionEvent e) {
-        Project project = e.getProject();
-        var systemPath = PathManager.getSystemPath();
-        Path cacheRoot = Path.of(systemPath, "qilletni-libs");
-
-        try {
-            if (Files.exists(cacheRoot)) {
-                try (var walk = Files.walk(cacheRoot)) {
-                    walk.sorted(Comparator.reverseOrder()).forEach(p -> {
-                        try { Files.deleteIfExists(p); } catch (Exception ignored) {}
-                    });
+        var project = e.getProject();
+        new Task.Backgroundable(project, "Clearing Qilletni library cache", false) {
+            @Override
+            public void run(@NotNull ProgressIndicator indicator) {
+                try {
+                    QilletniLibraryManager.getInstance().clearCache();
+                    QilletniProjectDependencies.refreshAll();
+                } catch (IOException ex) {
+                    NotificationGroupManager.getInstance().getNotificationGroup("Qilletni")
+                            .createNotification("Failed to clear the Qilletni library cache: " + ex.getMessage(), NotificationType.ERROR)
+                            .notify(project);
                 }
             }
-            Notifications.Bus.notify(new Notification("Qilletni Source Root", "Qilletni Libraries",
-                    "Cleared Qilletni library cache. Refreshing and rescanning…", NotificationType.INFORMATION), project);
-            VirtualFileManager.getInstance().asyncRefresh(() -> QilletniLibraryManager.getInstance().rescan());
-        } catch (Exception ex) {
-            Notifications.Bus.notify(new Notification("Qilletni Source Root", "Qilletni Libraries",
-                    "Failed to clear Qilletni library cache: " + ex.getMessage(), NotificationType.ERROR), project);
-        }
+        }.queue();
+    }
+
+    @Override
+    public @NotNull ActionUpdateThread getActionUpdateThread() {
+        return ActionUpdateThread.BGT;
     }
 }

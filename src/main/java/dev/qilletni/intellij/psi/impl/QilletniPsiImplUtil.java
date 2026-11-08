@@ -2,7 +2,6 @@ package dev.qilletni.intellij.psi.impl;
 
 import com.intellij.lang.ASTNode;
 import com.intellij.psi.PsiElement;
-import com.intellij.psi.impl.source.tree.LeafPsiElement;
 import dev.qilletni.intellij.psi.QilletniTypes;
 import org.jetbrains.annotations.Nullable;
 
@@ -24,8 +23,7 @@ public class QilletniPsiImplUtil {
     public static PsiElement setName(PsiElement e, String name) {
         var id = findIdNode(e);
         if (id == null) return e;
-        var newId = new LeafPsiElement(QilletniTypes.ID, name);
-        id.getPsi().replace(newId);
+        QilletniElementFactory.renameIdentifier(id.getPsi(), name);
         return e;
     }
 
