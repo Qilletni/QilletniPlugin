@@ -7,6 +7,7 @@ import org.jetbrains.annotations.Nullable;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -50,14 +51,20 @@ public final class QilletniWeightStats {
      * @param entryKind An entry's kind, e.g. {@code list} or {@code collection}, or {@code null} for other rows
      * @param songCount The number of songs a list, collection or album entry picks from, otherwise 0
      * @param songsShown If every song of the entry is shown, rather than only the most picked ones
+     * @param spans     Where the row's entry and the entries around it are written, outermost first, as far as known
      */
     public record Row(@NotNull String key, @NotNull Kind kind, @Nullable String separator, @NotNull String text,
                       @NotNull String tooltip, double expected, double actual, int count, int rejected,
-                      @NotNull List<Row> children, @Nullable String entryKind, int songCount, boolean songsShown) {
+                      @NotNull List<Row> children, @Nullable String entryKind, int songCount, boolean songsShown,
+                      @NotNull List<EntrySpan> spans) {
 
         Row(@NotNull String key, @NotNull Kind kind, @Nullable String separator, @NotNull String text, @NotNull String tooltip,
             double expected, double actual, int count, int rejected, @NotNull List<Row> children) {
-            this(key, kind, separator, text, tooltip, expected, actual, count, rejected, children, null, 0, false);
+            this(key, kind, separator, text, tooltip, expected, actual, count, rejected, children, null, 0, false, List.of());
+        }
+
+        Row withSpans(@NotNull List<EntrySpan> spans) {
+            return new Row(key, kind, separator, text, tooltip, expected, actual, count, rejected, children, entryKind, songCount, songsShown, spans);
         }
 
         /** If this entry's songs can be fetched with {@link #markRequested} and aren't shown yet. */
@@ -77,6 +84,35 @@ public final class QilletniWeightStats {
                        @Nullable String lastPick, @NotNull List<String> lastRejected) {}
 
     public record Summary(int id, @NotNull String label, int total) {}
+
+    /**
+     * A real pick, in the order they happened.
+     *
+     * @param key The picked entry's index path, e.g. {@code 4/1}, or {@link #MISS_KEY}
+     */
+    public record HistoryPick(@NotNull String key, @NotNull String trackId, @NotNull String song) {
+
+        public boolean miss() {
+            return MISS_KEY.equals(key);
+        }
+    }
+
+    /** A song seen in real picks of one entry. */
+    public record SeenSong(@NotNull String trackId, @NotNull String song, int count) {}
+
+    /**
+     * Everything known about one weights value, for simulating it. Never changes once made.
+     *
+     * @param breakdown  The entries and their chances, or {@code null} before the adapter sent them
+     * @param entrySongs Every song of list, collection and album entries, by row key, for those fetched
+     * @param seenSongs  Songs seen in real picks, by row key
+     * @param history    The real picks, oldest first, at most {@link #MAX_HISTORY}
+     */
+    public record SimulationInput(int id, @NotNull String label, WeightPickedEventArguments.@Nullable Breakdown breakdown,
+                                  @NotNull Map<String, WeightEntrySongsResponse> entrySongs,
+                                  @NotNull Map<String, List<SeenSong>> seenSongs, @NotNull List<HistoryPick> history) {}
+
+    public static final int MAX_HISTORY = 5_000;
 
     private final Map<Integer, Weights> weights = new LinkedHashMap<>();
     private int latestId;
@@ -111,10 +147,25 @@ public final class QilletniWeightStats {
 
         var songId = pick.trackId != null ? pick.trackId : pick.song;
         if (songId != null) {
+            var song = pick.song != null ? pick.song : songId;
             w.songs.computeIfAbsent(leafKey, k -> new HashMap<>())
-                    .computeIfAbsent(songId, k -> new SongCount(pick.song != null ? pick.song : songId))
+                    .computeIfAbsent(songId, k -> new SongCount(song))
                     .count++;
+            w.history.addLast(new HistoryPick(leafKey, songId, song));
+            if (w.history.size() > MAX_HISTORY) w.history.removeFirst();
         }
+    }
+
+    public synchronized @Nullable SimulationInput simulationInput(int id) {
+        var w = weights.get(id);
+        if (w == null) return null;
+
+        var seen = new HashMap<String, List<SeenSong>>();
+        w.songs.forEach((key, songs) -> seen.put(key, songs.entrySet().stream()
+                .map(entry -> new SeenSong(entry.getKey(), entry.getValue().song, entry.getValue().count))
+                .sorted(Comparator.comparing(SeenSong::trackId))
+                .toList()));
+        return new SimulationInput(id, w.label(), w.breakdown, Map.copyOf(w.entrySongs), Map.copyOf(seen), List.copyOf(w.history));
     }
 
     /**
@@ -167,6 +218,25 @@ public final class QilletniWeightStats {
         return Arrays.stream(key.split("/")).map(Integer::valueOf).toList();
     }
 
+    /**
+     * @return Where the entries of the most recent pick are written, outermost first; empty for a miss or if unknown
+     */
+    public synchronized @NotNull List<EntrySpan> lastPickSpans() {
+        var w = weights.get(latestId);
+        if (w == null || w.last == null || w.breakdown == null || MISS_KEY.equals(w.last.kind)) return List.of();
+
+        var spans = new ArrayList<EntrySpan>();
+        var nodes = orEmpty(w.breakdown.roots);
+        for (var level : orEmpty(w.last.path)) {
+            var node = nodes.stream().filter(n -> n.index == level.index).findFirst().orElse(null);
+            if (node == null) break;
+            var span = EntrySpan.of(node);
+            if (span != null) spans.add(span);
+            nodes = orEmpty(node.children);
+        }
+        return spans;
+    }
+
     /** The id of the weights picked from most recently, or 0 before any pick. */
     public synchronized int latestId() {
         return latestId;
@@ -186,7 +256,7 @@ public final class QilletniWeightStats {
         var rows = new ArrayList<Row>();
         var breakdown = w.breakdown;
         if (breakdown != null) {
-            for (var node : orEmpty(breakdown.roots)) rows.add(entryRow(w, node, ""));
+            for (var node : orEmpty(breakdown.roots)) rows.add(entryRow(w, node, "", List.of()));
             if (breakdown.omitted > 0) {
                 var text = "… %s more".formatted(count(breakdown.omitted));
                 rows.add(new Row("omitted", Kind.OMITTED, null, text, text + " entries not shown", breakdown.omittedChance, 0, 0, 0, List.of()));
@@ -216,12 +286,24 @@ public final class QilletniWeightStats {
         return number(value) + "%";
     }
 
-    static @NotNull String count(int count) {
+    public static @NotNull String count(int count) {
         return String.format(Locale.ROOT, "%,d", count);
     }
 
-    private Row entryRow(Weights w, WeightPickedEventArguments.Node node, String parentKey) {
+    /**
+     * @return The separator of an entry name like {@code [1] |~30%}, e.g. {@code |~}, or {@code null}
+     */
+    public static @Nullable String separator(@Nullable String name) {
+        if (name == null) return null;
+        var parsed = ENTRY_NAME.matcher(name);
+        return parsed.matches() ? parsed.group(1) : null;
+    }
+
+    private Row entryRow(Weights w, WeightPickedEventArguments.Node node, String parentKey, List<EntrySpan> parentSpans) {
         var key = parentKey.isEmpty() ? String.valueOf(node.index) : parentKey + "/" + node.index;
+        var span = EntrySpan.of(node);
+        var spans = new ArrayList<>(parentSpans);
+        if (span != null) spans.add(span);
         var name = node.name != null ? node.name : "[" + node.index + "]";
         var source = node.source != null ? node.source : "";
         var tooltip = (name + " " + source).strip();
@@ -231,14 +313,14 @@ public final class QilletniWeightStats {
 
         if ("multiplier".equals(node.kind)) {
             return new Row(key, Kind.MULTIPLIER, null, (amount + " " + source).strip(),
-                    tooltip + " (copies in the collection's queue, not rolled)", Double.NaN, 0, 0, 0, List.of());
+                    tooltip + " (copies in the collection's queue, not rolled)", Double.NaN, 0, 0, 0, List.of()).withSpans(List.copyOf(spans));
         }
 
         var songCount = node.songCount > 0 ? node.songCount : node.listSize;
         var loaded = w.entrySongs.get(key);
         List<Row> children;
         if (node.children != null && !node.children.isEmpty()) {
-            children = node.children.stream().map(child -> entryRow(w, child, key)).toList();
+            children = node.children.stream().map(child -> entryRow(w, child, key, spans)).toList();
         } else if ("song".equals(node.kind) || "function".equals(node.kind) && !w.songs.containsKey(key)) {
             children = List.of();
         } else if (loaded != null) {
@@ -249,14 +331,16 @@ public final class QilletniWeightStats {
         }
 
         var count = w.picks.getOrDefault(key, 0);
+        var ownSpans = List.copyOf(spans);
+        children = children.stream().map(child -> child.kind() == Kind.ENTRY ? child : child.withSpans(ownSpans)).toList();
         return new Row(key, Kind.ENTRY, separator, shortSource(node.kind, source, songCount), tooltip, node.combined,
-                share(count, w.total), count, w.rejected.getOrDefault(key, 0), children, node.kind, songCount, loaded != null);
+                share(count, w.total), count, w.rejected.getOrDefault(key, 0), children, node.kind, songCount, loaded != null, ownSpans);
     }
 
     /**
      * @return {@code list (4 songs)} for a list, {@code source (12 songs)} for a collection or album, otherwise {@code source}
      */
-    static @NotNull String shortSource(@Nullable String kind, @NotNull String source, int songCount) {
+    public static @NotNull String shortSource(@Nullable String kind, @NotNull String source, int songCount) {
         var songs = "%s %s".formatted(count(songCount), songCount == 1 ? "song" : "songs");
         if ("list".equals(kind)) return "list (%s)".formatted(songs);
         if (("collection".equals(kind) || "album".equals(kind)) && songCount > 0) return "%s (%s)".formatted(source, songs);
@@ -365,6 +449,8 @@ public final class QilletniWeightStats {
         final Map<String, WeightEntrySongsResponse> entrySongs = new HashMap<>();
         /** Row keys whose songs were requested. */
         final Set<String> requested = new HashSet<>();
+        /** The real picks, oldest first. */
+        final ArrayDeque<HistoryPick> history = new ArrayDeque<>();
         @Nullable WeightPickedEventArguments last;
 
         String label() {

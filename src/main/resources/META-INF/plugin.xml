@@ -124,6 +124,8 @@
 
         <toolWindow id="Qilletni" factoryClass="dev.qilletni.intellij.toolwindow.QilletniToolWindowFactory"
                     anchor="right" icon="/icons/icon.svg" canCloseContents="false"/>
+        <toolWindow id="Weights Simulator" factoryClass="dev.qilletni.intellij.debugger.simulator.QilletniSimulatorToolWindowFactory"
+                    anchor="bottom" icon="AllIcons.Toolwindows.ToolWindowDataView" canCloseContents="false"/>
         <editorNotificationProvider implementation="dev.qilletni.intellij.toolwindow.QilletniSetupNotificationProvider"/>
 
         <newProjectWizard.languageGenerator implementation="dev.qilletni.intellij.project.QilletniLanguageNewProjectWizard"/>

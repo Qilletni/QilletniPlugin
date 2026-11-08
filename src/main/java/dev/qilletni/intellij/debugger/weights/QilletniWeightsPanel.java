@@ -7,7 +7,7 @@ import com.intellij.openapi.actionSystem.ActionUpdateThread;
 import com.intellij.openapi.actionSystem.AnActionEvent;
 import com.intellij.openapi.actionSystem.DefaultActionGroup;
 import com.intellij.openapi.project.DumbAwareAction;
-import com.intellij.openapi.ui.Messages;
+import com.intellij.openapi.util.Disposer;
 import com.intellij.ui.DoubleClickListener;
 import com.intellij.openapi.ui.ComboBox;
 import com.intellij.ui.ColoredTreeCellRenderer;
@@ -25,7 +25,6 @@ import com.intellij.util.ui.UIUtil;
 import com.intellij.util.ui.update.MergingUpdateQueue;
 import com.intellij.util.ui.update.Update;
 import dev.qilletni.intellij.QilletniBundle;
-import dev.qilletni.intellij.debugger.QilletniDebuggerSettings;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -55,6 +54,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
+import java.util.function.IntConsumer;
 
 /**
  * The debugger's Weights tab: each weights value picked from, as a tree of its entries with their chance and how
@@ -73,6 +73,10 @@ public final class QilletniWeightsPanel extends JPanel implements Disposable {
 
     private final QilletniWeightStats stats;
     private final SongLoader songLoader;
+    private final IntConsumer openInSimulator;
+    private final EntryBoxes boxes;
+    /** Set while the rows are replaced, when the selection briefly goes away and comes back. */
+    private boolean replacingRows;
     private final MergingUpdateQueue queue;
     private final DefaultComboBoxModel<Integer> weightsModel = new DefaultComboBoxModel<>();
     private final ComboBox<Integer> weightsCombo = new ComboBox<>(weightsModel);
@@ -92,10 +96,18 @@ public final class QilletniWeightsPanel extends JPanel implements Disposable {
     private boolean followLatest = true;
     private boolean updatingCombo;
 
-    public QilletniWeightsPanel(@NotNull QilletniWeightStats stats, @NotNull SongLoader songLoader) {
+    /**
+     * @param openInSimulator Opens the Weights Simulator on a weights id
+     * @param boxes           Boxes the selected row's entry in the editor; the panel disposes it
+     */
+    public QilletniWeightsPanel(@NotNull QilletniWeightStats stats, @NotNull SongLoader songLoader, @NotNull IntConsumer openInSimulator,
+                                @NotNull EntryBoxes boxes) {
         super(new BorderLayout());
         this.stats = stats;
         this.songLoader = songLoader;
+        this.openInSimulator = openInSimulator;
+        this.boxes = boxes;
+        Disposer.register(this, boxes);
         this.queue = new MergingUpdateQueue("Qilletni weights", REFRESH_MS, true, null, this, null, true);
 
         var right = new DefaultTableCellRenderer();
@@ -119,6 +131,9 @@ public final class QilletniWeightsPanel extends JPanel implements Disposable {
         };
         table.setRootVisible(false);
         table.setTreeCellRenderer(new EntryRenderer());
+        table.getTree().addTreeSelectionListener(e -> {
+            if (!replacingRows) boxSelectedRow();
+        });
         table.getEmptyText().setText(QilletniBundle.message("debugger.weights.empty"));
         explainColumns();
 
@@ -142,7 +157,7 @@ public final class QilletniWeightsPanel extends JPanel implements Disposable {
             }
         }.installOn(table);
 
-        var toolbar = ActionManager.getInstance().createActionToolbar("QilletniWeights", new DefaultActionGroup(new ShowSongsAction()), true);
+        var toolbar = ActionManager.getInstance().createActionToolbar("QilletniWeights", new DefaultActionGroup(new ShowSongsAction(), new OpenInSimulatorAction()), true);
         toolbar.setTargetComponent(this);
 
         var top = new JPanel(new FlowLayout(FlowLayout.LEFT, JBUI.scale(8), JBUI.scale(4)));
@@ -238,6 +253,22 @@ public final class QilletniWeightsPanel extends JPanel implements Disposable {
             expanded.put(shownId, expandedKeys());
         }
 
+        replacingRows = true;
+        try {
+            replaceRows(view, selectedKey);
+        } finally {
+            replacingRows = false;
+        }
+        boxSelectedRow();
+    }
+
+    private void boxSelectedRow() {
+        var row = selectedRow();
+        if (row == null || row.spans().isEmpty()) boxes.clear();
+        else boxes.show(row.spans());
+    }
+
+    private void replaceRows(QilletniWeightStats.View view, @Nullable String selectedKey) {
         var root = new DefaultMutableTreeNode();
         view.rows().forEach(row -> root.add(node(row)));
         model.setRoot(root);
@@ -258,12 +289,7 @@ public final class QilletniWeightsPanel extends JPanel implements Disposable {
      * Fetches every song of {@code row}, after asking first if there are more than the setting allows automatically.
      */
     private void showSongs(QilletniWeightStats.Row row) {
-        var limit = QilletniDebuggerSettings.getInstance().getWeightSongLimit();
-        if (row.songCount() > limit && Messages.showYesNoDialog(this,
-                QilletniBundle.message("debugger.weights.showSongs.confirm", QilletniWeightStats.count(row.songCount()), row.text()),
-                QilletniBundle.message("debugger.weights.showSongs"), Messages.getQuestionIcon()) != Messages.YES) {
-            return;
-        }
+        if (!SongLoadConfirmation.confirm(this, row.songCount(), row.text())) return;
 
         expandWhenLoaded.add(row.key());
         songLoader.load(shownId, row.key());
@@ -281,6 +307,28 @@ public final class QilletniWeightsPanel extends JPanel implements Disposable {
             if (child != null) return child;
         }
         return null;
+    }
+
+    private final class OpenInSimulatorAction extends DumbAwareAction {
+        OpenInSimulatorAction() {
+            super(QilletniBundle.message("debugger.simulator.openInSimulator"), QilletniBundle.message("debugger.simulator.openInSimulator.description"),
+                    AllIcons.Toolwindows.ToolWindowDataView);
+        }
+
+        @Override
+        public @NotNull ActionUpdateThread getActionUpdateThread() {
+            return ActionUpdateThread.EDT;
+        }
+
+        @Override
+        public void update(@NotNull AnActionEvent event) {
+            event.getPresentation().setEnabled(shownId != 0);
+        }
+
+        @Override
+        public void actionPerformed(@NotNull AnActionEvent event) {
+            if (shownId != 0) openInSimulator.accept(shownId);
+        }
     }
 
     private final class ShowSongsAction extends DumbAwareAction {

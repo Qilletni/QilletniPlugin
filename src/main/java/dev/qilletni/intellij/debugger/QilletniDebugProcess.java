@@ -7,10 +7,13 @@ import com.intellij.execution.ui.ExecutionConsole;
 import com.intellij.execution.ui.RunnerLayoutUi;
 import com.intellij.execution.ui.layout.PlaceInGrid;
 import com.intellij.openapi.util.Disposer;
+import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.util.concurrency.AppExecutorUtil;
 import com.intellij.xdebugger.XDebugProcess;
 import com.intellij.xdebugger.XDebugSession;
+import com.intellij.xdebugger.XDebugSessionListener;
+import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.xdebugger.breakpoints.XBreakpoint;
 import com.intellij.xdebugger.breakpoints.XBreakpointHandler;
 import com.intellij.xdebugger.evaluation.XDebuggerEditorsProvider;
@@ -22,6 +25,8 @@ import dev.qilletni.intellij.debugger.dap.WeightEntrySongsArguments;
 import dev.qilletni.intellij.debugger.dap.WeightPickedEventArguments;
 import dev.qilletni.intellij.debugger.frames.QilletniStackFrame;
 import dev.qilletni.intellij.debugger.frames.QilletniSuspendContext;
+import dev.qilletni.intellij.debugger.simulator.QilletniSimulatorService;
+import dev.qilletni.intellij.debugger.weights.EntryBoxes;
 import dev.qilletni.intellij.debugger.weights.QilletniWeightStats;
 import dev.qilletni.intellij.debugger.weights.QilletniWeightsPanel;
 import org.eclipse.lsp4j.debug.Breakpoint;
@@ -86,7 +91,49 @@ public final class QilletniDebugProcess extends XDebugProcess implements Qilletn
         this.dap = dap;
         this.executionResult = executionResult;
         this.mapper = mapper;
+        QilletniSimulatorService.getInstance(session.getProject()).setSource(simulatorSource);
+
+        stopBoxes = new EntryBoxes(session.getProject(), mapper::toFile, EntryBoxes.PICKED);
+        session.addSessionListener(new XDebugSessionListener() {
+            @Override
+            public void sessionResumed() {
+                ApplicationManager.getApplication().invokeLater(stopBoxes::clear);
+            }
+
+            @Override
+            public void sessionStopped() {
+                ApplicationManager.getApplication().invokeLater(() -> Disposer.dispose(stopBoxes));
+            }
+        });
     }
+
+    /** Boxes the entries a {@code weight selected} stop picked, until the program resumes. */
+    private final EntryBoxes stopBoxes;
+
+    /** What the Weights Simulator tool window reads; it stays after the session ends. */
+    private final QilletniSimulatorService.Source simulatorSource = new QilletniSimulatorService.Source() {
+        @Override
+        public @NotNull QilletniWeightStats stats() {
+            return weightStats;
+        }
+
+        @Override
+        public boolean isAlive() {
+            return !ended && dap.isConnected();
+        }
+
+        @Override
+        public void loadSongs(int weightsId, @NotNull String key) {
+            if (isAlive()) loadEntrySongs(weightsId, key);
+        }
+
+        @Override
+        public @Nullable VirtualFile file(@NotNull String path) {
+            return mapper.toFile(path);
+        }
+    };
+
+    private volatile boolean ended;
 
     public @NotNull QilletniDapSession dap() {
         return dap;
@@ -190,6 +237,11 @@ public final class QilletniDebugProcess extends XDebugProcess implements Qilletn
             } else if (QilletniSongPlayedBreakpointType.STOP_REASON.equals(args.getReason())
                     || QilletniWeightSelectedBreakpointType.STOP_REASON.equals(args.getReason())) {
                 if (args.getDescription() != null) session.getConsoleView().print(args.getDescription() + "\n", ConsoleViewContentType.SYSTEM_OUTPUT);
+            }
+            if (QilletniWeightSelectedBreakpointType.STOP_REASON.equals(args.getReason())) {
+                // The pick's event arrives before its stop, so the latest pick is this one
+                var spans = weightStats.lastPickSpans();
+                ApplicationManager.getApplication().invokeLater(() -> stopBoxes.show(spans));
             }
             var breakpoint = filterBreakpoints.stream()
                     .filter(handler -> handler.type().stopReason().equals(args.getReason()))
@@ -298,6 +350,7 @@ public final class QilletniDebugProcess extends XDebugProcess implements Qilletn
     private void refreshWeights() {
         var panel = weightsPanel;
         if (panel != null) panel.refreshLater();
+        QilletniSimulatorService.getInstance(getSession().getProject()).changed();
     }
 
     @Override
@@ -364,6 +417,8 @@ public final class QilletniDebugProcess extends XDebugProcess implements Qilletn
 
     @Override
     public void stop() {
+        ended = true;
+        refreshWeights();
         // Sends disconnect, which may wait briefly for the adapter
         AppExecutorUtil.getAppExecutorService().execute(dap::close);
     }
@@ -404,7 +459,9 @@ public final class QilletniDebugProcess extends XDebugProcess implements Qilletn
         return new XDebugTabLayouter() {
             @Override
             public void registerAdditionalContent(@NotNull RunnerLayoutUi ui) {
-                var panel = new QilletniWeightsPanel(weightStats, QilletniDebugProcess.this::loadEntrySongs);
+                var panel = new QilletniWeightsPanel(weightStats, QilletniDebugProcess.this::loadEntrySongs,
+                        id -> QilletniSimulatorService.getInstance(getSession().getProject()).show(id),
+                        new EntryBoxes(getSession().getProject(), mapper::toFile, EntryBoxes.SELECTED));
                 var content = ui.createContent(WEIGHTS_CONTENT_ID, panel, QilletniBundle.message("debugger.weights.tab"), null, null);
                 content.setCloseable(false);
                 Disposer.register(content, panel);

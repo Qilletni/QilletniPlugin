@@ -154,6 +154,59 @@ public class QilletniWeightStatsTest extends TestCase {
         assertEquals(50.0 / 3, albumRow.children().getFirst().expected(), 1e-9);
     }
 
+    public void testHistoryAndSimulationInput() {
+        var stats = new QilletniWeightStats();
+        stats.add(pick(breakdown(50, 50), "song-a", 0, 0));
+        stats.add(pick(null, "song-c", 1));
+        var miss = pick(null, "queued");
+        miss.kind = "miss";
+        stats.add(miss);
+
+        var input = stats.simulationInput(1);
+        assertNotNull(input);
+        assertNotNull(input.breakdown());
+        assertEquals(List.of("0/0", "1", QilletniWeightStats.MISS_KEY), input.history().stream().map(QilletniWeightStats.HistoryPick::key).toList());
+        assertTrue(input.history().getLast().miss());
+        assertEquals("song-a", input.seenSongs().get("0/0").getFirst().trackId());
+
+        for (int i = 0; i < QilletniWeightStats.MAX_HISTORY + 10; i++) stats.add(pick(null, "song-" + i, 1));
+        var history = stats.simulationInput(1).history();
+        assertEquals(QilletniWeightStats.MAX_HISTORY, history.size());
+        assertEquals("song-" + (QilletniWeightStats.MAX_HISTORY + 9), history.getLast().trackId());
+    }
+
+    public void testSpans() {
+        var breakdown = breakdown(50, 50);
+        var outer = breakdown.roots.getFirst();
+        outer.sourcePath = "/main.ql";
+        outer.line = 3;
+        outer.column = 5;
+        outer.endLine = 3;
+        outer.endColumn = 20;
+        var inner = outer.children.get(1);
+        inner.sourcePath = "/main.ql";
+        inner.line = 8;
+        inner.column = 5;
+        inner.endLine = 8;
+        inner.endColumn = 30;
+
+        var stats = new QilletniWeightStats();
+        stats.add(pick(breakdown, "song-b", 0, 1));
+
+        var outerSpan = new EntrySpan("/main.ql", 3, 5, 3, 20);
+        var innerSpan = new EntrySpan("/main.ql", 8, 5, 8, 30);
+        assertEquals(List.of(outerSpan, innerSpan), stats.lastPickSpans());
+
+        var innerRow = row(row(stats.view(1).rows(), "0").children(), "0/1");
+        assertEquals(List.of(outerSpan, innerSpan), innerRow.spans());
+        assertEquals("entries without a span are left out", List.of(), row(stats.view(1).rows(), "1").spans());
+
+        var miss = pick(null, "queued");
+        miss.kind = "miss";
+        stats.add(miss);
+        assertEquals(List.of(), stats.lastPickSpans());
+    }
+
     public void testNumbers() {
         assertEquals("15%", QilletniWeightStats.percent(15));
         assertEquals("33.33%", QilletniWeightStats.percent(100.0 / 3));

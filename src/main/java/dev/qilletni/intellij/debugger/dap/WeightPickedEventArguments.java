@@ -52,6 +52,16 @@ public class WeightPickedEventArguments {
         public int listSize;
         /** The number of songs a list, collection or album entry picks from. */
         public int songCount;
+        /** The entry's amount as written, a percent or a multiplier. */
+        public double amount;
+        /** If the entry is a collection or album played in order. */
+        public boolean sequential;
+        /** Where the entry is written: a DAP source path and 1-based lines and columns, the end column exclusive. */
+        public String sourcePath;
+        public int line;
+        public int column;
+        public int endLine;
+        public int endColumn;
         public List<Node> children;
     }
 }
